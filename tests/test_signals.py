@@ -63,41 +63,44 @@ class TestMomentum:
 # volatility
 # ---------------------------------------------------------------------------
 
+def _ohlc_df(closes: list[float], hl_spread: float = 1.0) -> pd.DataFrame:
+    """Build a minimal OHLCV DataFrame with a fixed high/low spread."""
+    c = pd.Series(closes, dtype=float)
+    return pd.DataFrame({"high": c + hl_spread, "low": c - hl_spread, "close": c})
+
+
 class TestVolatility:
     def test_returns_zero_when_not_enough_data(self):
-        s = _series([100.0] * 19)  # _WINDOW = 20
-        assert volatility.compute(s) == 0.0
+        # needs _WINDOW + 1 = 21 rows; 20 is insufficient
+        df = _ohlc_df([100.0] * 20)
+        assert volatility.compute(df) == 0.0
 
-    def test_flat_prices_return_zero(self):
-        # std == 0 → guard returns 0.0
-        s = _series([100.0] * 30)
-        assert volatility.compute(s) == 0.0
+    def test_zero_atr_returns_zero(self):
+        # identical OHLC (doji candles) → TR = 0 → ATR = 0 → guard returns 0.0
+        df = _ohlc_df([100.0] * 30, hl_spread=0.0)
+        assert volatility.compute(df) == 0.0
 
-    def test_price_at_upper_band_positive(self):
-        # Create series where last price is well above the mean
-        base = _series([100.0] * 29 + [200.0])
-        score = volatility.compute(base)
-        assert score == 1.0  # clamped to +1
+    def test_price_above_upper_band_clamped_to_one(self):
+        # 29 rows at 100, last close = 200 → well above EMA + 2*ATR
+        df = _ohlc_df([100.0] * 29 + [200.0])
+        assert volatility.compute(df) == 1.0
 
-    def test_price_at_lower_band_negative(self):
-        base = _series([100.0] * 29 + [0.0])
-        score = volatility.compute(base)
-        assert score == -1.0  # clamped to -1
+    def test_price_below_lower_band_clamped_to_neg_one(self):
+        # 29 rows at 100, last close = 0 → well below EMA - 2*ATR
+        df = _ohlc_df([100.0] * 29 + [0.0])
+        assert volatility.compute(df) == -1.0
 
-    def test_price_at_mean_returns_near_zero(self):
-        # mean of last 20 is exactly the last price
-        prices = list(range(30, 51))  # 21 values
-        s = _series(prices)
-        # Replace last value with the window mean
-        window_mean = sum(prices[-20:]) / 20
-        prices[-1] = window_mean
-        s = _series(prices)
-        score = volatility.compute(s)
+    def test_price_at_ema_returns_near_zero(self):
+        # Steady prices → EMA ≈ mean; close at the mean → score ≈ 0
+        prices = [100.0] * 30
+        df = _ohlc_df(prices)
+        # Close is at the EMA (centre of channel) → linear map gives 0
+        score = volatility.compute(df)
         assert abs(score) < 0.1
 
     def test_output_clamped(self):
-        s = _series([100.0] * 29 + [1e6])
-        assert volatility.compute(s) == 1.0
+        df = _ohlc_df([100.0] * 29 + [1e6])
+        assert volatility.compute(df) == 1.0
 
 
 # ---------------------------------------------------------------------------

@@ -146,7 +146,7 @@ def compute_signal(symbol: str, asset_class: str = "crypto") -> SignalResult | N
     latest_funding = df["funding_rate"].iloc[-1] if asset_class == "crypto" else None
 
     mom = momentum.compute(closes)
-    vol = volatility.compute(closes)
+    vol = volatility.compute(df)
     fund = funding.compute(latest_funding)
 
     composite = _deterministic_composite(mom, vol, fund if asset_class == "crypto" else None, asset_class)
