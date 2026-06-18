@@ -1,0 +1,274 @@
+"""Tests for deterministic signal modules: momentum, volatility, funding, compute."""
+
+from __future__ import annotations
+
+import math
+import sqlite3
+import tempfile
+from pathlib import Path
+from unittest.mock import patch
+
+import pandas as pd
+import pytest
+
+from signals import funding, momentum, volatility
+from signals.compute import SignalResult, _action, _deterministic_composite, compute_signal
+
+
+# ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+
+def _series(values: list[float]) -> pd.Series:
+    return pd.Series(values, dtype=float)
+
+
+# ---------------------------------------------------------------------------
+# momentum
+# ---------------------------------------------------------------------------
+
+class TestMomentum:
+    def test_returns_zero_when_not_enough_data(self):
+        s = _series([100.0] * 25)  # _SLOW = 26, need at least 26
+        assert momentum.compute(s) == 0.0
+
+    def test_flat_prices_score_near_zero(self):
+        s = _series([100.0] * 50)
+        assert abs(momentum.compute(s)) < 0.01
+
+    def test_rising_trend_positive(self):
+        prices = [100.0 + i for i in range(50)]
+        score = momentum.compute(_series(prices))
+        assert score > 0.05
+
+    def test_falling_trend_negative(self):
+        prices = [200.0 - i for i in range(50)]
+        score = momentum.compute(_series(prices))
+        assert score < -0.05
+
+    def test_output_bounded(self):
+        # Very aggressive trend
+        prices = [1.0 * (2 ** i) for i in range(50)]
+        score = momentum.compute(_series(prices))
+        assert -1.0 <= score <= 1.0
+
+    def test_symmetry(self):
+        up = [100.0 + i * 2 for i in range(50)]
+        down = [200.0 - i * 2 for i in range(50)]
+        assert momentum.compute(_series(up)) > 0
+        assert momentum.compute(_series(down)) < 0
+
+
+# ---------------------------------------------------------------------------
+# volatility
+# ---------------------------------------------------------------------------
+
+class TestVolatility:
+    def test_returns_zero_when_not_enough_data(self):
+        s = _series([100.0] * 19)  # _WINDOW = 20
+        assert volatility.compute(s) == 0.0
+
+    def test_flat_prices_return_zero(self):
+        # std == 0 → guard returns 0.0
+        s = _series([100.0] * 30)
+        assert volatility.compute(s) == 0.0
+
+    def test_price_at_upper_band_positive(self):
+        # Create series where last price is well above the mean
+        base = _series([100.0] * 29 + [200.0])
+        score = volatility.compute(base)
+        assert score == 1.0  # clamped to +1
+
+    def test_price_at_lower_band_negative(self):
+        base = _series([100.0] * 29 + [0.0])
+        score = volatility.compute(base)
+        assert score == -1.0  # clamped to -1
+
+    def test_price_at_mean_returns_near_zero(self):
+        # mean of last 20 is exactly the last price
+        prices = list(range(30, 51))  # 21 values
+        s = _series(prices)
+        # Replace last value with the window mean
+        window_mean = sum(prices[-20:]) / 20
+        prices[-1] = window_mean
+        s = _series(prices)
+        score = volatility.compute(s)
+        assert abs(score) < 0.1
+
+    def test_output_clamped(self):
+        s = _series([100.0] * 29 + [1e6])
+        assert volatility.compute(s) == 1.0
+
+
+# ---------------------------------------------------------------------------
+# funding
+# ---------------------------------------------------------------------------
+
+class TestFunding:
+    def test_none_returns_zero(self):
+        assert funding.compute(None) == 0.0
+
+    def test_nan_returns_zero(self):
+        assert funding.compute(float("nan")) == 0.0
+
+    def test_zero_funding_returns_zero(self):
+        assert funding.compute(0.0) == 0.0
+
+    def test_positive_funding_is_bearish(self):
+        # Positive funding (longs pay shorts) → contrarian bearish → negative score
+        assert funding.compute(0.001) < 0
+
+    def test_negative_funding_is_bullish(self):
+        # Negative funding → contrarian bullish → positive score
+        assert funding.compute(-0.001) > 0
+
+    def test_symmetry(self):
+        pos = funding.compute(0.001)
+        neg = funding.compute(-0.001)
+        assert abs(pos + neg) < 1e-9
+
+    def test_output_bounded(self):
+        assert -1.0 <= funding.compute(1.0) <= 1.0
+        assert -1.0 <= funding.compute(-1.0) <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# _action
+# ---------------------------------------------------------------------------
+
+class TestAction:
+    def test_above_threshold_buy(self):
+        import config
+        assert _action(config.SIGNAL_THRESHOLD + 0.01) == "buy"
+
+    def test_below_neg_threshold_sell(self):
+        import config
+        assert _action(-(config.SIGNAL_THRESHOLD + 0.01)) == "sell"
+
+    def test_near_zero_hold(self):
+        assert _action(0.0) == "hold"
+
+
+# ---------------------------------------------------------------------------
+# _deterministic_composite
+# ---------------------------------------------------------------------------
+
+class TestDeterministicComposite:
+    def test_crypto_all_positive_returns_positive(self):
+        score = _deterministic_composite(0.5, 0.5, 0.5, "crypto")
+        assert score > 0
+
+    def test_crypto_all_negative_returns_negative(self):
+        score = _deterministic_composite(-0.5, -0.5, -0.5, "crypto")
+        assert score < 0
+
+    def test_stocks_ignores_funding_none(self):
+        # stocks don't pass funding
+        score = _deterministic_composite(0.5, 0.5, None, "stocks")
+        assert score > 0
+
+    def test_output_bounded(self):
+        score = _deterministic_composite(1.0, 1.0, 1.0, "crypto")
+        assert -1.0 <= score <= 1.0
+
+
+# ---------------------------------------------------------------------------
+# compute_signal — integration test with an in-memory DB
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def temp_db(tmp_path: Path):
+    """Spin up a fresh SQLite DB with the schema applied."""
+    db_file = str(tmp_path / "test.db")
+    schema = (Path(__file__).parent.parent / "database" / "schema.sql").read_text()
+    conn = sqlite3.connect(db_file)
+    conn.executescript(schema)
+    conn.commit()
+    conn.close()
+    return db_file
+
+
+def _insert_prices(db_path: str, symbol: str, asset_class: str, n: int = 50) -> None:
+    """Insert synthetic OHLCV rows into prices."""
+    conn = sqlite3.connect(db_path)
+    for i in range(n):
+        ts = 1_700_000_000 + i * 3600
+        close = 100.0 + i * 0.5  # steady uptrend
+        conn.execute(
+            """
+            INSERT INTO prices (symbol, asset_class, timeframe, ts, open, high, low, close, volume, funding_rate)
+            VALUES (?, ?, '1h', ?, ?, ?, ?, ?, 1000.0, ?)
+            """,
+            (symbol, asset_class, ts, close, close + 1, close - 1, close, 0.0001),
+        )
+    conn.commit()
+    conn.close()
+
+
+class TestComputeSignal:
+    def test_returns_none_when_no_data(self, temp_db: str):
+        import database.db as db_module
+
+        orig_db = db_module._db
+
+        class _FakeDB:
+            def connect(self):
+                c = sqlite3.connect(temp_db)
+                c.row_factory = sqlite3.Row
+                return c
+
+        db_module._db = _FakeDB()
+        try:
+            result = compute_signal("MISSING/USDT", "crypto")
+            assert result is None
+        finally:
+            db_module._db = orig_db
+
+    def test_returns_signal_result_with_data(self, temp_db: str):
+        import database.db as db_module
+
+        _insert_prices(temp_db, "BTC/USDT", "crypto")
+        orig_db = db_module._db
+
+        class _FakeDB:
+            def connect(self):
+                c = sqlite3.connect(temp_db)
+                c.row_factory = sqlite3.Row
+                return c
+
+        db_module._db = _FakeDB()
+        try:
+            result = compute_signal("BTC/USDT", "crypto")
+        finally:
+            db_module._db = orig_db
+
+        assert isinstance(result, SignalResult)
+        assert result.symbol == "BTC/USDT"
+        assert result.asset_class == "crypto"
+        assert -1.0 <= result.momentum_score <= 1.0
+        assert -1.0 <= result.volatility_score <= 1.0
+        assert result.funding_score is not None
+        assert -1.0 <= result.funding_score <= 1.0
+        assert -1.0 <= result.composite_score <= 1.0
+        assert result.action in ("buy", "sell", "hold")
+
+    def test_stocks_have_no_funding_score(self, temp_db: str):
+        import database.db as db_module
+
+        _insert_prices(temp_db, "AAPL", "stocks")
+        orig_db = db_module._db
+
+        class _FakeDB:
+            def connect(self):
+                c = sqlite3.connect(temp_db)
+                c.row_factory = sqlite3.Row
+                return c
+
+        db_module._db = _FakeDB()
+        try:
+            result = compute_signal("AAPL", "stocks")
+        finally:
+            db_module._db = orig_db
+
+        assert result is not None
+        assert result.funding_score is None
