@@ -128,3 +128,42 @@ SENTIMENT_MAX_AGE_SECONDS: int = int(
 # ---------------------------------------------------------------------------
 
 LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO").upper()
+
+
+# ---------------------------------------------------------------------------
+# Startup validation
+# ---------------------------------------------------------------------------
+
+def validate_config() -> None:
+    """Raise ValueError if the current toggle/credential combination is unsafe.
+
+    Called once at bot startup so misconfigurations are caught before the
+    main loop runs. Guards:
+    - CRYPTO_LIVE=true requires BINANCE_API_KEY + BINANCE_SECRET
+    - STOCKS_LIVE=true requires ALPACA_API_KEY + ALPACA_SECRET
+    - Signal weights within each class must sum to 1.0 (±0.001 tolerance)
+    """
+    errors: list[str] = []
+
+    if CRYPTO_LIVE:
+        if not BINANCE_API_KEY or not BINANCE_SECRET:
+            errors.append(
+                "CRYPTO_LIVE=true requires BINANCE_API_KEY and BINANCE_SECRET"
+            )
+
+    if STOCKS_LIVE:
+        if not ALPACA_API_KEY or not ALPACA_SECRET:
+            errors.append(
+                "STOCKS_LIVE=true requires ALPACA_API_KEY and ALPACA_SECRET"
+            )
+
+    for name, weights in (
+        ("CRYPTO_SIGNAL_WEIGHTS", CRYPTO_SIGNAL_WEIGHTS),
+        ("STOCK_SIGNAL_WEIGHTS", STOCK_SIGNAL_WEIGHTS),
+    ):
+        total = sum(weights.values())
+        if abs(total - 1.0) > 0.001:
+            errors.append(f"{name} must sum to 1.0, got {total:.4f}")
+
+    if errors:
+        raise ValueError("Config validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
