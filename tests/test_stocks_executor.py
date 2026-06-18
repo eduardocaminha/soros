@@ -437,6 +437,57 @@ class TestLiveMode:
         assert order[0] == 0
         assert pos[0] == 0
 
+    def test_paper_position_closed_as_paper_when_live_toggled(
+        self, executor, temp_db, monkeypatch
+    ):
+        """Flipping STOCKS_LIVE=true must not send a live sell for a paper position."""
+        monkeypatch.setattr(config, "STOCKS_LIVE", True)
+        conn = sqlite3.connect(temp_db)
+        conn.execute(
+            """INSERT INTO positions
+                   (symbol, asset_class, side, quantity, entry_price,
+                    current_price, status, is_paper)
+               VALUES ('AAPL', 'stocks', 'long', 10.0, 140.0, 140.0, 'open', 1)"""
+        )
+        conn.commit()
+        conn.close()
+        _insert_price(temp_db, "AAPL", 155.0)
+        alpaca_called = []
+        monkeypatch.setattr(
+            "engine.stocks_executor.urlopen",
+            lambda req, timeout=None: alpaca_called.append(req) or (_ for _ in ()).throw(AssertionError("must not call Alpaca")),
+        )
+
+        result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
+
+        assert result is not None
+        assert result.is_paper is True
+        assert result.exchange_id is None
+        assert alpaca_called == []
+
+    def test_live_position_closed_as_live_when_toggle_off(
+        self, executor, temp_db, monkeypatch
+    ):
+        """STOCKS_LIVE=false must not skip the live sell for a position opened live."""
+        monkeypatch.setattr(config, "STOCKS_LIVE", False)
+        conn = sqlite3.connect(temp_db)
+        conn.execute(
+            """INSERT INTO positions
+                   (symbol, asset_class, side, quantity, entry_price,
+                    current_price, status, is_paper)
+               VALUES ('AAPL', 'stocks', 'long', 10.0, 140.0, 140.0, 'open', 0)"""
+        )
+        conn.commit()
+        conn.close()
+        _insert_price(temp_db, "AAPL", 155.0)
+        self._mock_alpaca(monkeypatch, order_id="AP-999", avg_price=155.5)
+
+        result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
+
+        assert result is not None
+        assert result.is_paper is False
+        assert result.exchange_id == "AP-999"
+
 
 # ---------------------------------------------------------------------------
 # execute_stocks_once
