@@ -255,6 +255,8 @@ class StocksExecutor:
             exchange_id, price = _place_alpaca_order(signal.symbol, "buy", quantity, price)
             if exchange_id is None:
                 return None
+        else:
+            price = price * (1.0 + config.FEE_PCT + config.SLIPPAGE_PCT)
 
         pos_id = _insert_position(
             signal.symbol, signal.asset_class, "long", quantity, price, is_paper
@@ -306,6 +308,8 @@ class StocksExecutor:
             exchange_id, price = _place_alpaca_order(signal.symbol, "sell", quantity, price)
             if exchange_id is None:
                 return None
+        else:
+            price = price * (1.0 - config.FEE_PCT - config.SLIPPAGE_PCT)
 
         realized_pnl = (price - entry_price) * quantity
         pos_id = int(pos["id"])

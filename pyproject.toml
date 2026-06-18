@@ -1,2 +1,11 @@
 [tool.pytest.ini_options]
 testpaths = ["tests"]
+
+[dependency-groups]
+dev = [
+    "ccxt>=4.5.59",
+    "numpy>=2.4.6",
+    "pandas>=3.0.3",
+    "pytest>=9.1.0",
+    "yfinance>=1.4.1",
+]

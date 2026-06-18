@@ -140,7 +140,8 @@ class TestLatestClose:
 class TestPaperBuy:
     def test_buy_creates_position_and_order(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "STOCKS_LIVE", False)
-        _insert_price(temp_db, "AAPL", 150.0)
+        raw_price = 150.0
+        _insert_price(temp_db, "AAPL", raw_price)
         sig = _make_signal(action="buy")
         result = executor.execute(sig, equity=10_000.0)
 
@@ -150,8 +151,9 @@ class TestPaperBuy:
         assert result.asset_class == "stocks"
         assert result.is_paper is True
         assert result.exchange_id is None
-        assert result.price == pytest.approx(150.0)
-        assert result.quantity == pytest.approx(10_000.0 * config.POSITION_SIZE_PCT / 150.0)
+        expected_price = raw_price * (1.0 + config.FEE_PCT + config.SLIPPAGE_PCT)
+        assert result.price == pytest.approx(expected_price)
+        assert result.quantity == pytest.approx(10_000.0 * config.POSITION_SIZE_PCT / raw_price)
 
         assert _open_position_count(temp_db) == 1
         assert _order_count(temp_db) == 1
@@ -209,8 +211,10 @@ class TestPaperSell:
 
     def test_sell_closes_position(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "STOCKS_LIVE", False)
-        self._setup_open_position(temp_db, "AAPL", 140.0)
-        _insert_price(temp_db, "AAPL", 155.0)
+        entry_price = 140.0
+        raw_close = 155.0
+        self._setup_open_position(temp_db, "AAPL", entry_price)
+        _insert_price(temp_db, "AAPL", raw_close)
         result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
 
         assert result is not None
@@ -218,22 +222,30 @@ class TestPaperSell:
         assert result.is_paper is True
         assert result.exchange_id is None
 
+        _cost = config.FEE_PCT + config.SLIPPAGE_PCT
+        expected_exec = raw_close * (1.0 - _cost)
+        expected_pnl = 10.0 * (expected_exec - entry_price)
         conn = sqlite3.connect(temp_db)
         pos = conn.execute("SELECT status, realized_pnl FROM positions").fetchone()
         conn.close()
         assert pos[0] == "closed"
-        assert pos[1] == pytest.approx(10.0 * (155.0 - 140.0))
+        assert pos[1] == pytest.approx(expected_pnl)
 
     def test_sell_with_loss(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "STOCKS_LIVE", False)
-        self._setup_open_position(temp_db, "AAPL", 160.0)
-        _insert_price(temp_db, "AAPL", 145.0)
+        entry_price = 160.0
+        raw_close = 145.0
+        self._setup_open_position(temp_db, "AAPL", entry_price)
+        _insert_price(temp_db, "AAPL", raw_close)
         executor.execute(_make_signal(action="sell"), equity=10_000.0)
 
+        _cost = config.FEE_PCT + config.SLIPPAGE_PCT
+        expected_exec = raw_close * (1.0 - _cost)
+        expected_pnl = 10.0 * (expected_exec - entry_price)
         conn = sqlite3.connect(temp_db)
         pos = conn.execute("SELECT realized_pnl FROM positions").fetchone()
         conn.close()
-        assert pos[0] == pytest.approx(10.0 * (145.0 - 160.0))  # negative
+        assert pos[0] == pytest.approx(expected_pnl)  # negative
 
     def test_sell_no_open_position_returns_none(self, executor, monkeypatch):
         monkeypatch.setattr(config, "STOCKS_LIVE", False)

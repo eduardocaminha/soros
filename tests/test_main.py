@@ -50,23 +50,113 @@ def _make_aggregated(symbol="BTC/USDT", asset_class="crypto", action="hold"):
 
 
 class TestCurrentEquity:
-    def test_returns_default_when_no_history(self):
+    def test_returns_initial_capital_when_no_positions(self):
+        import config
         from main import _current_equity
-        equity = _current_equity(is_paper=True)
-        assert equity == pytest.approx(10_000.0)
+        equity = _current_equity()
+        assert equity == pytest.approx(config.INITIAL_CAPITAL)
 
-    def test_returns_last_equity_snapshot(self, temp_db):
+    def test_equity_includes_unrealized_pnl(self, temp_db):
+        import config
         import database.db as db_module
         conn = db_module.get_connection()
         conn.execute(
-            "INSERT INTO equity_curve (equity, peak_equity, drawdown_pct, is_paper) VALUES (?, ?, ?, ?)",
-            (12_000.0, 12_000.0, 0.0, 1),
+            """INSERT INTO positions
+               (symbol, asset_class, side, quantity, entry_price,
+                current_price, unrealized_pnl, is_paper)
+               VALUES ('BTC/USDT', 'crypto', 'long', 0.1, 50000.0, 55000.0, 500.0, 1)"""
         )
         conn.commit()
 
         from main import _current_equity
-        equity = _current_equity(is_paper=True)
-        assert equity == pytest.approx(12_000.0)
+        equity = _current_equity()
+        assert equity == pytest.approx(config.INITIAL_CAPITAL + 500.0)
+
+    def test_equity_includes_realized_pnl(self, temp_db):
+        import config
+        import database.db as db_module
+        conn = db_module.get_connection()
+        conn.execute(
+            """INSERT INTO positions
+               (symbol, asset_class, side, quantity, entry_price,
+                current_price, realized_pnl, status, is_paper)
+               VALUES ('ETH/USDT', 'crypto', 'long', 1.0, 2000.0, 2500.0, 500.0, 'closed', 1)"""
+        )
+        conn.commit()
+
+        from main import _current_equity
+        equity = _current_equity()
+        assert equity == pytest.approx(config.INITIAL_CAPITAL + 500.0)
+
+    def test_equity_sums_both_realized_and_unrealized(self, temp_db):
+        import config
+        import database.db as db_module
+        conn = db_module.get_connection()
+        conn.execute(
+            """INSERT INTO positions
+               (symbol, asset_class, side, quantity, entry_price,
+                current_price, realized_pnl, status, is_paper)
+               VALUES ('ETH/USDT', 'crypto', 'long', 1.0, 2000.0, 2200.0, 200.0, 'closed', 1)"""
+        )
+        conn.execute(
+            """INSERT INTO positions
+               (symbol, asset_class, side, quantity, entry_price,
+                current_price, unrealized_pnl, is_paper)
+               VALUES ('BTC/USDT', 'crypto', 'long', 0.05, 40000.0, 42000.0, 100.0, 1)"""
+        )
+        conn.commit()
+
+        from main import _current_equity
+        equity = _current_equity()
+        assert equity == pytest.approx(config.INITIAL_CAPITAL + 200.0 + 100.0)
+
+
+class TestMarkToMarket:
+    def test_updates_current_price_and_unrealized_pnl(self, temp_db):
+        import database.db as db_module
+        from main import _mark_to_market
+
+        conn = db_module.get_connection()
+        conn.execute(
+            """INSERT INTO positions
+               (symbol, asset_class, side, quantity, entry_price, current_price, is_paper)
+               VALUES ('BTC/USDT', 'crypto', 'long', 0.1, 50000.0, 50000.0, 1)"""
+        )
+        conn.execute(
+            """INSERT INTO prices
+               (symbol, asset_class, timeframe, ts, open, high, low, close, volume)
+               VALUES ('BTC/USDT', 'crypto', '1h', 1000, 55000, 55000, 55000, 55000, 1.0)"""
+        )
+        conn.commit()
+
+        _mark_to_market()
+
+        row = conn.execute(
+            "SELECT current_price, unrealized_pnl FROM positions WHERE status = 'open'"
+        ).fetchone()
+        assert row["current_price"] == pytest.approx(55_000.0)
+        assert row["unrealized_pnl"] == pytest.approx(0.1 * (55_000.0 - 50_000.0))
+
+    def test_skips_position_with_no_price(self, temp_db):
+        import database.db as db_module
+        from main import _mark_to_market
+
+        conn = db_module.get_connection()
+        conn.execute(
+            """INSERT INTO positions
+               (symbol, asset_class, side, quantity, entry_price,
+                current_price, unrealized_pnl, is_paper)
+               VALUES ('SOL/USDT', 'crypto', 'long', 10.0, 100.0, 100.0, 0.0, 1)"""
+        )
+        conn.commit()
+
+        _mark_to_market()  # no price row for SOL/USDT — must not raise or corrupt
+
+        row = conn.execute(
+            "SELECT current_price, unrealized_pnl FROM positions WHERE status = 'open'"
+        ).fetchone()
+        assert row["current_price"] == pytest.approx(100.0)
+        assert row["unrealized_pnl"] == pytest.approx(0.0)
 
 
 class TestRunCycle:

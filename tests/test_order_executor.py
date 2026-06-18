@@ -155,7 +155,8 @@ class TestLatestClose:
 class TestPaperBuy:
     def test_buy_creates_position_and_order(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "CRYPTO_LIVE", False)
-        _insert_price(temp_db, "BTC/USDT", 50_000.0)
+        raw_price = 50_000.0
+        _insert_price(temp_db, "BTC/USDT", raw_price)
         sig = _make_signal(action="buy")
         result = executor.execute(sig, equity=10_000.0)
 
@@ -164,11 +165,22 @@ class TestPaperBuy:
         assert result.symbol == "BTC/USDT"
         assert result.is_paper is True
         assert result.exchange_id is None
-        assert result.price == pytest.approx(50_000.0)
-        assert result.quantity == pytest.approx(10_000.0 * config.POSITION_SIZE_PCT / 50_000.0)
+        expected_price = raw_price * (1.0 + config.FEE_PCT + config.SLIPPAGE_PCT)
+        assert result.price == pytest.approx(expected_price)
+        assert result.quantity == pytest.approx(10_000.0 * config.POSITION_SIZE_PCT / raw_price)
 
         assert _open_position_count(temp_db) == 1
         assert _order_count(temp_db) == 1
+
+    def test_paper_buy_applies_fee_and_slippage(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        raw_price = 50_000.0
+        _insert_price(temp_db, "BTC/USDT", raw_price)
+        result = executor.execute(_make_signal(action="buy"), equity=10_000.0)
+
+        assert result is not None
+        # Paper buy must record a higher entry price than the raw close
+        assert result.price > raw_price
 
     def test_buy_order_is_paper_flagged(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "CRYPTO_LIVE", False)
@@ -223,8 +235,10 @@ class TestPaperSell:
 
     def test_sell_closes_position(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "CRYPTO_LIVE", False)
-        self._setup_open_position(temp_db, "BTC/USDT", 40_000.0)
-        _insert_price(temp_db, "BTC/USDT", 45_000.0)
+        entry_price = 40_000.0
+        raw_close = 45_000.0
+        self._setup_open_position(temp_db, "BTC/USDT", entry_price)
+        _insert_price(temp_db, "BTC/USDT", raw_close)
         result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
 
         assert result is not None
@@ -232,22 +246,41 @@ class TestPaperSell:
         assert result.is_paper is True
         assert result.exchange_id is None
 
+        _cost = config.FEE_PCT + config.SLIPPAGE_PCT
+        expected_exec = raw_close * (1.0 - _cost)
+        expected_pnl = 0.2 * (expected_exec - entry_price)
         conn = sqlite3.connect(temp_db)
         pos = conn.execute("SELECT status, realized_pnl FROM positions").fetchone()
         conn.close()
         assert pos[0] == "closed"
-        assert pos[1] == pytest.approx(0.2 * (45_000.0 - 40_000.0))
+        assert pos[1] == pytest.approx(expected_pnl)
 
     def test_sell_with_loss(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "CRYPTO_LIVE", False)
-        self._setup_open_position(temp_db, "BTC/USDT", 50_000.0)
-        _insert_price(temp_db, "BTC/USDT", 45_000.0)
+        entry_price = 50_000.0
+        raw_close = 45_000.0
+        self._setup_open_position(temp_db, "BTC/USDT", entry_price)
+        _insert_price(temp_db, "BTC/USDT", raw_close)
         executor.execute(_make_signal(action="sell"), equity=10_000.0)
 
+        _cost = config.FEE_PCT + config.SLIPPAGE_PCT
+        expected_exec = raw_close * (1.0 - _cost)
+        expected_pnl = 0.2 * (expected_exec - entry_price)
         conn = sqlite3.connect(temp_db)
         pos = conn.execute("SELECT realized_pnl FROM positions").fetchone()
         conn.close()
-        assert pos[0] == pytest.approx(0.2 * (45_000.0 - 50_000.0))  # negative
+        assert pos[0] == pytest.approx(expected_pnl)  # negative
+
+    def test_paper_sell_applies_fee_and_slippage(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        raw_close = 45_000.0
+        self._setup_open_position(temp_db, "BTC/USDT", 40_000.0)
+        _insert_price(temp_db, "BTC/USDT", raw_close)
+        result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
+
+        assert result is not None
+        # Paper sell must record a lower execution price than the raw close
+        assert result.price < raw_close
 
     def test_sell_no_open_position_returns_none(self, executor, monkeypatch):
         monkeypatch.setattr(config, "CRYPTO_LIVE", False)

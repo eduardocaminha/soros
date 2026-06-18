@@ -78,6 +78,17 @@ OHLCV_LIMIT: int = 200  # candles fetched per call (enough for all signal window
 LOOP_INTERVAL_SECONDS: int = int(os.environ.get("LOOP_INTERVAL_SECONDS", "3600"))
 
 # ---------------------------------------------------------------------------
+# Capital & execution costs
+# ---------------------------------------------------------------------------
+
+# Starting equity for P&L calculation (paper mode)
+INITIAL_CAPITAL: float = float(os.environ.get("INITIAL_CAPITAL", "10000"))
+
+# Fee and slippage applied to paper execution prices per trade (each side)
+FEE_PCT: float = float(os.environ.get("FEE_PCT", "0.001"))        # 0.1 %
+SLIPPAGE_PCT: float = float(os.environ.get("SLIPPAGE_PCT", "0.0005"))  # 0.05 %
+
+# ---------------------------------------------------------------------------
 # Risk manager — hard limits (not toggleable at runtime)
 # ---------------------------------------------------------------------------
 
