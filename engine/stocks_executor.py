@@ -296,10 +296,13 @@ class StocksExecutor:
 
         quantity = float(pos["quantity"])
         entry_price = float(pos["entry_price"])
-        is_paper = not config.STOCKS_LIVE
+        # Use the position's own is_paper flag, not the current toggle.  This
+        # prevents sending a live sell to Alpaca for a paper-opened position when
+        # the toggle is flipped mid-session, and vice-versa.
+        is_paper = bool(pos["is_paper"])
         exchange_id: str | None = None
 
-        if config.STOCKS_LIVE:
+        if not is_paper:
             exchange_id, price = _place_alpaca_order(signal.symbol, "sell", quantity, price)
             if exchange_id is None:
                 return None
