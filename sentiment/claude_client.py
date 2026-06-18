@@ -1,6 +1,6 @@
 """Claude subscription client for sentiment queries.
 
-Wraps claude_code_sdk.query() which uses the user's Claude subscription
+Wraps claude_agent_sdk.query() which uses the user's Claude subscription
 without requiring ANTHROPIC_API_KEY.  Falls back transparently to None
 (deterministic-only mode) on RateLimitEvent or ImportError.
 
@@ -25,18 +25,18 @@ _log = logging.getLogger(__name__)
 # ---------------------------------------------------------------------------
 
 try:
-    from claude_code_sdk import (  # type: ignore[import-not-found]
-        ClaudeCodeOptions,
+    from claude_agent_sdk import (  # type: ignore[import-not-found]
+        ClaudeAgentOptions,
         query as _sdk_query,
     )
-    from claude_code_sdk.types import (  # type: ignore[import-not-found]
+    from claude_agent_sdk.types import (  # type: ignore[import-not-found]
         AssistantMessage,
         RateLimitEvent,
     )
     _SDK_AVAILABLE = True
 except ImportError:
     _sdk_query = None  # type: ignore[assignment]
-    ClaudeCodeOptions = None  # type: ignore[assignment]
+    ClaudeAgentOptions = None  # type: ignore[assignment]
     AssistantMessage = None  # type: ignore[assignment]
     RateLimitEvent = None  # type: ignore[assignment]
     _SDK_AVAILABLE = False
@@ -87,7 +87,7 @@ class ClaudeClient:
         parts: list[str] = []
         async for event in _sdk_query(  # type: ignore[misc]
             prompt=prompt,
-            options=ClaudeCodeOptions(max_turns=self._max_turns),
+            options=ClaudeAgentOptions(max_turns=self._max_turns),
         ):
             if RateLimitEvent is not None and isinstance(event, RateLimitEvent):
                 raise RateLimitedError

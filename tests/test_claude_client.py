@@ -37,6 +37,17 @@ async def _events(*items):
 # Tests
 # ---------------------------------------------------------------------------
 
+class TestSdkAvailability:
+    """claude_agent_sdk is installed → _SDK_AVAILABLE must be True."""
+
+    def test_sdk_available_flag_is_true(self):
+        import sentiment.claude_client as cc
+        assert cc._SDK_AVAILABLE is True, (
+            "claude_agent_sdk import fell back to except-branch; "
+            "check that the package is installed"
+        )
+
+
 class TestClaudeClientSdkMissing:
     """SDK import fails → query() returns None without raising."""
 
@@ -57,7 +68,7 @@ class TestClaudeClientQuery:
             _sdk_query=MagicMock(return_value=events_iter),
             AssistantMessage=_FakeAssistantMessage,
             RateLimitEvent=_FakeRateLimitEvent,
-            ClaudeCodeOptions=MagicMock(return_value=MagicMock()),
+            ClaudeAgentOptions=MagicMock(return_value=MagicMock()),
         )
 
     def test_returns_assistant_text(self):
@@ -97,7 +108,7 @@ class TestClaudeClientQuery:
             "sentiment.claude_client",
             _SDK_AVAILABLE=True,
             _sdk_query=_bad_query,
-            ClaudeCodeOptions=MagicMock(return_value=MagicMock()),
+            ClaudeAgentOptions=MagicMock(return_value=MagicMock()),
         ):
             client = ClaudeClient()
             result = client.query("prompt")
