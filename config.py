@@ -78,6 +78,19 @@ OHLCV_LIMIT: int = 200  # candles fetched per call (enough for all signal window
 LOOP_INTERVAL_SECONDS: int = int(os.environ.get("LOOP_INTERVAL_SECONDS", "3600"))
 
 # ---------------------------------------------------------------------------
+# Capital and trading costs (paper simulation)
+# ---------------------------------------------------------------------------
+
+# Starting capital for the paper simulation. Live mode ignores this.
+INITIAL_CAPITAL: float = float(os.environ.get("INITIAL_CAPITAL", "10000"))
+
+# Fee charged per trade as a fraction of notional (applied in paper mode).
+FEE_PCT: float = float(os.environ.get("FEE_PCT", "0.001"))
+
+# One-way slippage as a fraction of price (applied in paper mode).
+SLIPPAGE_PCT: float = float(os.environ.get("SLIPPAGE_PCT", "0.0005"))
+
+# ---------------------------------------------------------------------------
 # Risk manager — hard limits (not toggleable at runtime)
 # ---------------------------------------------------------------------------
 

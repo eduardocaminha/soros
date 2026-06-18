@@ -164,7 +164,10 @@ class TestPaperBuy:
         assert result.symbol == "BTC/USDT"
         assert result.is_paper is True
         assert result.exchange_id is None
-        assert result.price == pytest.approx(50_000.0)
+        # paper price is inflated by slippage + fee
+        expected_price = 50_000.0 * (1.0 + config.SLIPPAGE_PCT) * (1.0 + config.FEE_PCT)
+        assert result.price == pytest.approx(expected_price)
+        # quantity is sized on the raw market price, not the cost-adjusted one
         assert result.quantity == pytest.approx(10_000.0 * config.POSITION_SIZE_PCT / 50_000.0)
 
         assert _open_position_count(temp_db) == 1
@@ -232,11 +235,12 @@ class TestPaperSell:
         assert result.is_paper is True
         assert result.exchange_id is None
 
+        exec_close = 45_000.0 * (1.0 - config.SLIPPAGE_PCT) * (1.0 - config.FEE_PCT)
         conn = sqlite3.connect(temp_db)
         pos = conn.execute("SELECT status, realized_pnl FROM positions").fetchone()
         conn.close()
         assert pos[0] == "closed"
-        assert pos[1] == pytest.approx(0.2 * (45_000.0 - 40_000.0))
+        assert pos[1] == pytest.approx(0.2 * (exec_close - 40_000.0))
 
     def test_sell_with_loss(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "CRYPTO_LIVE", False)
@@ -244,10 +248,11 @@ class TestPaperSell:
         _insert_price(temp_db, "BTC/USDT", 45_000.0)
         executor.execute(_make_signal(action="sell"), equity=10_000.0)
 
+        exec_close = 45_000.0 * (1.0 - config.SLIPPAGE_PCT) * (1.0 - config.FEE_PCT)
         conn = sqlite3.connect(temp_db)
         pos = conn.execute("SELECT realized_pnl FROM positions").fetchone()
         conn.close()
-        assert pos[0] == pytest.approx(0.2 * (45_000.0 - 50_000.0))  # negative
+        assert pos[0] == pytest.approx(0.2 * (exec_close - 50_000.0))  # negative
 
     def test_sell_no_open_position_returns_none(self, executor, monkeypatch):
         monkeypatch.setattr(config, "CRYPTO_LIVE", False)
@@ -547,3 +552,118 @@ class TestExecuteOnce:
         custom_ex = OrderExecutor()
         results = execute_once([_make_signal(action="buy")], equity=10_000.0, executor=custom_ex)
         assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# Fee and slippage (paper mode)
+# ---------------------------------------------------------------------------
+
+class TestFeeAndSlippage:
+    def test_paper_buy_price_inflated_by_fee_and_slippage(
+        self, executor, temp_db, monkeypatch
+    ):
+        """Paper buy execution price must include slippage + fee markup."""
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        monkeypatch.setattr(config, "FEE_PCT", 0.001)
+        monkeypatch.setattr(config, "SLIPPAGE_PCT", 0.0005)
+        _insert_price(temp_db, "BTC/USDT", 50_000.0)
+
+        result = executor.execute(_make_signal(action="buy"), equity=10_000.0)
+
+        assert result is not None
+        expected = 50_000.0 * 1.0005 * 1.001
+        assert result.price == pytest.approx(expected)
+        assert result.price > 50_000.0
+
+    def test_paper_sell_price_discounted_by_fee_and_slippage(
+        self, executor, temp_db, monkeypatch
+    ):
+        """Paper sell execution price must be reduced by slippage + fee."""
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        monkeypatch.setattr(config, "FEE_PCT", 0.001)
+        monkeypatch.setattr(config, "SLIPPAGE_PCT", 0.0005)
+
+        conn = sqlite3.connect(temp_db)
+        conn.execute(
+            """INSERT INTO positions
+                   (symbol, asset_class, side, quantity, entry_price,
+                    current_price, status, is_paper)
+               VALUES ('BTC/USDT', 'crypto', 'long', 0.1, 50000.0, 50000.0, 'open', 1)"""
+        )
+        conn.commit()
+        conn.close()
+        _insert_price(temp_db, "BTC/USDT", 55_000.0)
+
+        result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
+
+        assert result is not None
+        expected = 55_000.0 * 0.9995 * 0.999
+        assert result.price == pytest.approx(expected)
+        assert result.price < 55_000.0
+
+    def test_round_trip_fee_reduces_pnl(self, executor, temp_db, monkeypatch):
+        """A round-trip in paper mode must yield less P&L than a cost-free trade."""
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        monkeypatch.setattr(config, "FEE_PCT", 0.001)
+        monkeypatch.setattr(config, "SLIPPAGE_PCT", 0.0005)
+
+        # Insert two prices at distinct timestamps to avoid the UNIQUE constraint
+        conn = sqlite3.connect(temp_db)
+        conn.execute(
+            "INSERT INTO prices (symbol, asset_class, timeframe, ts, open, high, low, close, volume)"
+            " VALUES ('BTC/USDT', 'crypto', '1h', 1000, 50000, 50000, 50000, 50000, 1.0)"
+        )
+        conn.commit()
+        conn.close()
+        executor.execute(_make_signal(action="buy"), equity=10_000.0)
+
+        conn = sqlite3.connect(temp_db)
+        pos = conn.execute(
+            "SELECT entry_price, quantity FROM positions WHERE status='open'"
+        ).fetchone()
+        entry_price = pos[0]  # entry_price
+        quantity = pos[1]     # quantity
+        conn.close()
+
+        conn = sqlite3.connect(temp_db)
+        conn.execute(
+            "INSERT INTO prices (symbol, asset_class, timeframe, ts, open, high, low, close, volume)"
+            " VALUES ('BTC/USDT', 'crypto', '1h', 2000, 55000, 55000, 55000, 55000, 1.0)"
+        )
+        conn.commit()
+        conn.close()
+        result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
+        assert result is not None
+
+        conn = sqlite3.connect(temp_db)
+        row = conn.execute(
+            "SELECT realized_pnl FROM positions WHERE status='closed'"
+        ).fetchone()
+        conn.close()
+        actual_pnl = row[0]  # realized_pnl
+
+        # P&L without any costs would be (55000 - entry_price) * quantity
+        # but sell price is discounted, so actual P&L must be less
+        gross_pnl = (55_000.0 - entry_price) * quantity
+        assert actual_pnl < gross_pnl
+
+    def test_live_buy_does_not_apply_paper_costs(
+        self, executor, temp_db, monkeypatch
+    ):
+        """Live orders use the exchange fill price — no extra slippage/fee layer."""
+        monkeypatch.setattr(config, "CRYPTO_LIVE", True)
+        _insert_price(temp_db, "BTC/USDT", 50_000.0)
+        mock_ex = MagicMock()
+        mock_ex.amount_to_precision.side_effect = lambda sym, qty: qty
+        mock_ex.create_market_order.return_value = {
+            "id": "live-1",
+            "average": 50_050.0,
+            "price": 50_050.0,
+        }
+        monkeypatch.setattr("engine.order_executor._make_exchange", lambda: mock_ex)
+
+        result = executor.execute(_make_signal(action="buy"), equity=10_000.0)
+
+        assert result is not None
+        # price must be the exchange fill price, not raw * (1+fee) * (1+slippage)
+        assert result.price == pytest.approx(50_050.0)

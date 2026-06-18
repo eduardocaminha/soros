@@ -50,23 +50,98 @@ def _make_aggregated(symbol="BTC/USDT", asset_class="crypto", action="hold"):
 
 
 class TestCurrentEquity:
-    def test_returns_default_when_no_history(self):
+    def test_returns_initial_capital_when_no_positions(self):
+        import config
         from main import _current_equity
-        equity = _current_equity(is_paper=True)
-        assert equity == pytest.approx(10_000.0)
+        equity = _current_equity()
+        assert equity == pytest.approx(config.INITIAL_CAPITAL)
 
-    def test_returns_last_equity_snapshot(self, temp_db):
+    def test_equity_includes_realized_pnl_from_closed_position(self, temp_db):
+        import config
         import database.db as db_module
         conn = db_module.get_connection()
         conn.execute(
-            "INSERT INTO equity_curve (equity, peak_equity, drawdown_pct, is_paper) VALUES (?, ?, ?, ?)",
-            (12_000.0, 12_000.0, 0.0, 1),
+            """
+            INSERT INTO positions
+                (symbol, asset_class, side, quantity, entry_price, current_price,
+                 realized_pnl, is_paper, status, closed_at)
+            VALUES ('BTC/USDT', 'crypto', 'long', 0.1, 50000.0, 55000.0, 500.0, 1, 'closed', unixepoch())
+            """
         )
         conn.commit()
 
         from main import _current_equity
-        equity = _current_equity(is_paper=True)
-        assert equity == pytest.approx(12_000.0)
+        equity = _current_equity()
+        assert equity == pytest.approx(config.INITIAL_CAPITAL + 500.0)
+
+    def test_equity_moves_with_market_price(self, temp_db):
+        """Open position unrealized P&L must update when the price changes."""
+        import config
+        import database.db as db_module
+        conn = db_module.get_connection()
+
+        conn.execute(
+            """
+            INSERT INTO prices
+                (symbol, asset_class, timeframe, ts, open, high, low, close, volume)
+            VALUES ('BTC/USDT', 'crypto', '1h', 1000, 100.0, 100.0, 100.0, 100.0, 1.0)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO positions
+                (symbol, asset_class, side, quantity, entry_price, current_price, is_paper)
+            VALUES ('BTC/USDT', 'crypto', 'long', 1.0, 100.0, 100.0, 1)
+            """
+        )
+        conn.commit()
+
+        from main import _current_equity
+        # price == entry_price → no unrealized P&L
+        assert _current_equity() == pytest.approx(config.INITIAL_CAPITAL)
+
+        # price rises to 110 — equity must reflect it
+        conn.execute(
+            """
+            INSERT INTO prices
+                (symbol, asset_class, timeframe, ts, open, high, low, close, volume)
+            VALUES ('BTC/USDT', 'crypto', '1h', 2000, 110.0, 110.0, 110.0, 110.0, 1.0)
+            """
+        )
+        conn.commit()
+
+        equity2 = _current_equity()
+        assert equity2 == pytest.approx(config.INITIAL_CAPITAL + 10.0)
+
+    def test_equity_marks_to_market_and_updates_position_row(self, temp_db):
+        """_current_equity must write back updated current_price/unrealized_pnl."""
+        import database.db as db_module
+        conn = db_module.get_connection()
+
+        conn.execute(
+            """
+            INSERT INTO prices
+                (symbol, asset_class, timeframe, ts, open, high, low, close, volume)
+            VALUES ('ETH/USDT', 'crypto', '1h', 1000, 200.0, 200.0, 200.0, 200.0, 1.0)
+            """
+        )
+        conn.execute(
+            """
+            INSERT INTO positions
+                (symbol, asset_class, side, quantity, entry_price, current_price, is_paper)
+            VALUES ('ETH/USDT', 'crypto', 'long', 2.0, 150.0, 150.0, 1)
+            """
+        )
+        conn.commit()
+
+        from main import _current_equity
+        _current_equity()
+
+        row = conn.execute(
+            "SELECT current_price, unrealized_pnl FROM positions WHERE symbol = 'ETH/USDT'"
+        ).fetchone()
+        assert row["current_price"] == pytest.approx(200.0)
+        assert row["unrealized_pnl"] == pytest.approx((200.0 - 150.0) * 2.0)
 
 
 class TestRunCycle:

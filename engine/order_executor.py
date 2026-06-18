@@ -224,6 +224,8 @@ class OrderExecutor:
             exchange_id, price = self._place_live(signal.symbol, "buy", quantity, price)
             if exchange_id is None:
                 return None
+        else:
+            price = price * (1.0 + config.SLIPPAGE_PCT) * (1.0 + config.FEE_PCT)
 
         pos_id = _insert_position(
             signal.symbol, signal.asset_class, "long", quantity, price, is_paper
@@ -275,6 +277,8 @@ class OrderExecutor:
             exchange_id, price = self._place_live(signal.symbol, "sell", quantity, price)
             if exchange_id is None:
                 return None
+        else:
+            price = price * (1.0 - config.SLIPPAGE_PCT) * (1.0 - config.FEE_PCT)
 
         realized_pnl = (price - entry_price) * quantity
         pos_id = int(pos["id"])

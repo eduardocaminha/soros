@@ -150,7 +150,8 @@ class TestPaperBuy:
         assert result.asset_class == "stocks"
         assert result.is_paper is True
         assert result.exchange_id is None
-        assert result.price == pytest.approx(150.0)
+        expected_price = 150.0 * (1.0 + config.SLIPPAGE_PCT) * (1.0 + config.FEE_PCT)
+        assert result.price == pytest.approx(expected_price)
         assert result.quantity == pytest.approx(10_000.0 * config.POSITION_SIZE_PCT / 150.0)
 
         assert _open_position_count(temp_db) == 1
@@ -218,11 +219,12 @@ class TestPaperSell:
         assert result.is_paper is True
         assert result.exchange_id is None
 
+        exec_close = 155.0 * (1.0 - config.SLIPPAGE_PCT) * (1.0 - config.FEE_PCT)
         conn = sqlite3.connect(temp_db)
         pos = conn.execute("SELECT status, realized_pnl FROM positions").fetchone()
         conn.close()
         assert pos[0] == "closed"
-        assert pos[1] == pytest.approx(10.0 * (155.0 - 140.0))
+        assert pos[1] == pytest.approx(10.0 * (exec_close - 140.0))
 
     def test_sell_with_loss(self, executor, temp_db, monkeypatch):
         monkeypatch.setattr(config, "STOCKS_LIVE", False)
@@ -230,10 +232,11 @@ class TestPaperSell:
         _insert_price(temp_db, "AAPL", 145.0)
         executor.execute(_make_signal(action="sell"), equity=10_000.0)
 
+        exec_close = 145.0 * (1.0 - config.SLIPPAGE_PCT) * (1.0 - config.FEE_PCT)
         conn = sqlite3.connect(temp_db)
         pos = conn.execute("SELECT realized_pnl FROM positions").fetchone()
         conn.close()
-        assert pos[0] == pytest.approx(10.0 * (145.0 - 160.0))  # negative
+        assert pos[0] == pytest.approx(10.0 * (exec_close - 160.0))  # negative
 
     def test_sell_no_open_position_returns_none(self, executor, monkeypatch):
         monkeypatch.setattr(config, "STOCKS_LIVE", False)

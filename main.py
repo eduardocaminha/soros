@@ -38,29 +38,49 @@ def _handle_signal(signum: int, _frame: object) -> None:
     _shutdown = True
 
 
-def _current_equity(is_paper: bool) -> float:
-    """Estimate current equity from open positions + any realised P&L baseline.
+def _current_equity() -> float:
+    """Mark-to-market equity: INITIAL_CAPITAL + realized_pnl + unrealized_pnl.
 
-    When no equity snapshots exist, returns a default of 10 000 USD so the
-    first cycle can size positions.  The risk manager records every value
-    we pass here, so the drawdown gate starts tracking from the first cycle.
+    Updates current_price and unrealized_pnl for every open position from the
+    latest prices row before summing, so the equity curve moves with the market.
+    Falls back to INITIAL_CAPITAL when there are no positions yet.
     """
     conn = get_connection()
-    row = conn.execute(
-        "SELECT equity FROM equity_curve ORDER BY ts DESC, id DESC LIMIT 1"
-    ).fetchone()
 
-    if row:
-        return float(row["equity"])
-
-    # First run: estimate from open positions
-    open_rows = conn.execute(
-        "SELECT entry_price, quantity FROM positions WHERE status = 'open'"
+    # Mark open positions to market
+    open_positions = conn.execute(
+        "SELECT id, symbol, quantity, entry_price FROM positions WHERE status = 'open'"
     ).fetchall()
-    if open_rows:
-        return sum(float(r["entry_price"]) * float(r["quantity"]) for r in open_rows)
 
-    return 10_000.0
+    for pos in open_positions:
+        row = conn.execute(
+            "SELECT close FROM prices WHERE symbol = ? ORDER BY ts DESC LIMIT 1",
+            (pos["symbol"],),
+        ).fetchone()
+        if row:
+            current_price = float(row["close"])
+            unrealized_pnl = (
+                (current_price - float(pos["entry_price"])) * float(pos["quantity"])
+            )
+            conn.execute(
+                "UPDATE positions SET current_price = ?, unrealized_pnl = ? WHERE id = ?",
+                (current_price, unrealized_pnl, pos["id"]),
+            )
+    conn.commit()
+
+    row = conn.execute(
+        "SELECT COALESCE(SUM(realized_pnl), 0.0) AS total"
+        " FROM positions WHERE status = 'closed'"
+    ).fetchone()
+    total_realized = float(row["total"])
+
+    row = conn.execute(
+        "SELECT COALESCE(SUM(unrealized_pnl), 0.0) AS total"
+        " FROM positions WHERE status = 'open'"
+    ).fetchone()
+    total_unrealized = float(row["total"])
+
+    return config.INITIAL_CAPITAL + total_realized + total_unrealized
 
 
 def _run_cycle(rm: RiskManager) -> None:
@@ -95,9 +115,9 @@ def _run_cycle(rm: RiskManager) -> None:
     _log.info("aggregating signals")
     aggregated = signal_aggregator.aggregate_once()
 
-    # 5. Estimate equity for position sizing
+    # 5. Mark-to-market and compute current equity for position sizing
     is_paper = not (config.CRYPTO_LIVE or config.STOCKS_LIVE)
-    equity = _current_equity(is_paper)
+    equity = _current_equity()
 
     # 6. Execute orders
     _log.info("executing orders (equity=%.2f, paper=%s)", equity, is_paper)
