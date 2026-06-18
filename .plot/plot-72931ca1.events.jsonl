@@ -1,0 +1,12 @@
+{"type":"plot_created","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:00.295Z","data":{"name":"soros: crypto trading bot (deterministico + sentimento, SQLite local)"}}
+{"type":"intent_edited","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:03.074Z","data":{"field":"goal","value":"Bot de trading automatizado (cripto + acoes) combinando sinais deterministicos e sentimento por LLM, storage SQLite local, execucao real toggleavel por classe."}}
+{"type":"intent_edited","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:03.074Z","data":{"field":"non_goals","value":["Decisao por debate de LLMs como no TradingAgents (research-only).","Banco cloud (Supabase); o storage e SQLite local."]}}
+{"type":"intent_edited","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:03.074Z","data":{"field":"constraints","value":["Sentimento via subscricao do Claude (claude-agent-sdk), sem API key e sem claude -p.","Paper 48h+ antes de live; stop de drawdown nao desativavel; max 3 posicoes.","Python 3.14 + deps modernas."]}}
+{"type":"intent_edited","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:03.074Z","data":{"field":"success_criteria","value":["Paper 48h+ com sinais, sentimento e logs no SQLite local e dashboard de P&L.","Execucao real liga/desliga por classe via toggle."]}}
+{"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:05.508Z","data":{"id":"att-001","type":"seeds_issue","ref":"soros-bf71","role":"tracks"}}
+{"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:10.551Z","data":{"id":"att-002","type":"mulch_record","ref":"mx-1c4f4b","role":"informs"}}
+{"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:13.269Z","data":{"id":"att-003","type":"mulch_record","ref":"mx-ae48a8","role":"informs"}}
+{"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:15.378Z","data":{"id":"att-004","type":"mulch_record","ref":"mx-940c5f","role":"informs"}}
+{"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:16.691Z","data":{"id":"att-005","type":"mulch_record","ref":"mx-d480e1","role":"informs"}}
+{"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:18.233Z","data":{"id":"att-006","type":"mulch_record","ref":"mx-9e5ce8","role":"informs"}}
+{"type":"status_changed","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:19.865Z","data":{"from":"drafting","to":"ready"}}
