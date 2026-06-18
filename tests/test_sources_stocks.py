@@ -54,6 +54,14 @@ class TestFetchCnnFearGreed:
             _, label = _fetch_cnn_fear_greed()
         assert label == "Greed"
 
+    def test_rounds_score(self):
+        # 72.5 → 72 under Python's banker's rounding (nearest even)
+        data = {"fear_and_greed": {"score": 72.5, "rating": "greed"}}
+        with patch("sentiment.sources_stocks._get_json", return_value=data):
+            value, label = _fetch_cnn_fear_greed()
+        assert value == 72
+        assert label == "Greed"
+
 
 # ---------------------------------------------------------------------------
 # _fetch_yahoo_price
@@ -132,6 +140,24 @@ class TestFetchYahooPrice:
         with patch("sentiment.sources_stocks._get_json", return_value=data):
             _, ch5d = _fetch_yahoo_price("AAPL")
         assert ch5d == pytest.approx(5.0)
+
+    def test_negative_24h_change(self):
+        # price 110 → 100: correct pct = (100-110)/110*100 = -10/110*100 ≈ -9.09%
+        pct = (100.0 - 110.0) / 110.0 * 100.0  # ≈ -9.0909
+        data = {
+            "chart": {
+                "result": [
+                    {
+                        "meta": {"regularMarketChangePercent": pct},
+                        "indicators": {"quote": [{"close": [110.0, 100.0]}]},
+                    }
+                ],
+                "error": None,
+            }
+        }
+        with patch("sentiment.sources_stocks._get_json", return_value=data):
+            ch24, _ = _fetch_yahoo_price("AAPL")
+        assert ch24 == pytest.approx((100.0 - 110.0) / 110.0 * 100.0)
 
 
 # ---------------------------------------------------------------------------
