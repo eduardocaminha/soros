@@ -126,3 +126,37 @@ class TestClaudeClientQuery:
             client = ClaudeClient()
             result = client.query("prompt")
         assert result is None
+
+    def test_no_runtime_error_on_rate_limit_cleanup(self):
+        """Generator with async cleanup does not raise RuntimeError when rate-limited.
+
+        Regression: raising inside the async-for body caused
+        'RuntimeError: aclose asynchronous generator is already running' because
+        Python tried to close the generator while it was mid-execution.  The fix
+        uses break+flag so the generator closes via the normal async-for exit path.
+        """
+        cleanup_ran = []
+
+        async def _gen_with_cleanup():
+            try:
+                yield _FakeRateLimitEvent()
+                yield _FakeAssistantMessage("should not be reached")
+            finally:
+                # Simulate async teardown (e.g. closing HTTP connections)
+                await asyncio.sleep(0)
+                cleanup_ran.append(True)
+
+        with patch.multiple(
+            "sentiment.claude_client",
+            _SDK_AVAILABLE=True,
+            _sdk_query=MagicMock(return_value=_gen_with_cleanup()),
+            AssistantMessage=_FakeAssistantMessage,
+            RateLimitEvent=_FakeRateLimitEvent,
+            ClaudeAgentOptions=MagicMock(return_value=MagicMock()),
+        ):
+            client = ClaudeClient()
+            # Must not raise RuntimeError; must fall back to None
+            result = client.query("prompt")
+
+        assert result is None, "Expected None fallback on rate limit"
+        assert cleanup_ran, "Generator cleanup (finally block) must have run"
