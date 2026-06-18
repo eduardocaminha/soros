@@ -265,10 +265,13 @@ class OrderExecutor:
 
         quantity = float(pos["quantity"])
         entry_price = float(pos["entry_price"])
-        is_paper = not config.CRYPTO_LIVE
+        # Use the position's own is_paper flag, not the current toggle.  This
+        # prevents sending a live sell for a paper-opened position when the
+        # toggle is flipped mid-session, and vice-versa.
+        is_paper = bool(pos["is_paper"])
         exchange_id: str | None = None
 
-        if config.CRYPTO_LIVE:
+        if not is_paper:
             exchange_id, price = self._place_live(signal.symbol, "sell", quantity, price)
             if exchange_id is None:
                 return None

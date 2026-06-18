@@ -461,6 +461,54 @@ class TestLiveMode:
         call_qty = mock_ex.create_market_order.call_args[0][2]
         assert call_qty == pytest.approx(0.002)
 
+    def test_paper_position_closed_as_paper_when_live_toggled(
+        self, executor, temp_db, monkeypatch
+    ):
+        """Flipping CRYPTO_LIVE=true must not send a live sell for a paper position."""
+        monkeypatch.setattr(config, "CRYPTO_LIVE", True)
+        conn = sqlite3.connect(temp_db)
+        conn.execute(
+            """INSERT INTO positions
+                   (symbol, asset_class, side, quantity, entry_price,
+                    current_price, status, is_paper)
+               VALUES ('BTC/USDT', 'crypto', 'long', 0.1, 40000.0, 40000.0, 'open', 1)"""
+        )
+        conn.commit()
+        conn.close()
+        _insert_price(temp_db, "BTC/USDT", 42_000.0)
+        mock_ex = self._mock_exchange(monkeypatch)
+
+        result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
+
+        assert result is not None
+        assert result.is_paper is True
+        assert result.exchange_id is None
+        mock_ex.create_market_order.assert_not_called()
+
+    def test_live_position_closed_as_live_when_toggle_off(
+        self, executor, temp_db, monkeypatch
+    ):
+        """CRYPTO_LIVE=false must not skip the live sell for a position opened live."""
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        conn = sqlite3.connect(temp_db)
+        conn.execute(
+            """INSERT INTO positions
+                   (symbol, asset_class, side, quantity, entry_price,
+                    current_price, status, is_paper)
+               VALUES ('BTC/USDT', 'crypto', 'long', 0.2, 48000.0, 48000.0, 'open', 0)"""
+        )
+        conn.commit()
+        conn.close()
+        _insert_price(temp_db, "BTC/USDT", 50_000.0)
+        mock_ex = self._mock_exchange(monkeypatch, order_id="BN-999", avg_price=50_200.0)
+
+        result = executor.execute(_make_signal(action="sell"), equity=10_000.0)
+
+        assert result is not None
+        assert result.is_paper is False
+        assert result.exchange_id == "BN-999"
+        mock_ex.create_market_order.assert_called_once()
+
 
 # ---------------------------------------------------------------------------
 # execute_once
