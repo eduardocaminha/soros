@@ -1,0 +1,48 @@
+name: auto-merge
+
+# Gate + merge auto-contido (nao depende de branch protection, que e plan-gated).
+# Roda as checagens; so faz squash-merge se todas passarem. PRs do dono, nao-draft.
+
+on:
+  pull_request:
+    types: [opened, reopened, synchronize, ready_for_review]
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  gate-and-merge:
+    runs-on: ubuntu-latest
+    if: >-
+      !github.event.pull_request.draft &&
+      github.event.pull_request.user.login == github.repository_owner
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.pull_request.head.sha }}
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.13"
+
+      - name: Python syntax (compileall)
+        run: |
+          files=$(git ls-files '*.py')
+          if [ -n "$files" ]; then python -m compileall -q $files; else echo "no python yet"; fi
+
+      - name: Python tests (se existirem)
+        run: |
+          if git ls-files | grep -qE '(_test\.py|test_.*\.py|tests/.*\.py)$'; then
+            python -m pip install -U pip pytest
+            pip install -r requirements.txt || echo "deps best-effort"
+            pytest -q
+          else
+            echo "no tests yet"
+          fi
+
+      - name: Squash-merge (gate passou)
+        env:
+          GH_TOKEN: ${{ secrets.AUTO_MERGE_PAT }}
+          PR_URL: ${{ github.event.pull_request.html_url }}
+        run: gh pr merge --squash --delete-branch "$PR_URL"

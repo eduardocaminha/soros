@@ -1,0 +1,24 @@
+# Secrets / env
+.env
+.env.*
+!.env.example
+dashboard/.env.local
+!dashboard/.env.local.example
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.pytest_cache/
+.ruff_cache/
+
+# Node / Next.js
+node_modules/
+dashboard/.next/
+dashboard/out/
+
+# OS / logs
+.DS_Store
+*.log
+.run-plan-logs/

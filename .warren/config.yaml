@@ -1,0 +1,5 @@
+# Defaults do warren para este projeto (warren auto-preenche o picker/prompt).
+defaultRole: claude-code
+defaultPrompt: work on sd {seed_id}
+defaultBranch: main
+runBranchPrefix: warren

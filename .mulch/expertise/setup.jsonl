@@ -1,0 +1,1 @@
+{"type":"decision","classification":"foundational","recorded_at":"2026-06-18T00:24:14.474Z","title":"Python 3.14 + deps modernas; sem pandas-ta","rationale":"numpy 2.4 / pandas 3.0 / ccxt 4.5 / python-binance 1.0.37. pandas-ta removido (incompat 3.14 via numba e nao usado; ATR calculado a mao).","id":"mx-c5ee53"}

@@ -1,0 +1,1 @@
+{"type":"convention","classification":"foundational","recorded_at":"2026-06-18T00:24:14.721Z","content":"Paper trading 48h+ obrigatorio antes de live. Stop de drawdown 15% nao desativavel via config. Max 3 posicoes simultaneas (hard limit). Toda ordem logada antes de enviar; bot nunca crasha em silencio (erros -> bot_logs).","id":"mx-3962be"}
