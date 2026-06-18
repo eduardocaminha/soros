@@ -1,0 +1,74 @@
+:root {
+  --bg: #0d1117;
+  --surface: #161b22;
+  --border: #30363d;
+  --text: #e6edf3;
+  --text-muted: #8b949e;
+  --green: #3fb950;
+  --red: #f85149;
+  --yellow: #d29922;
+  --blue: #58a6ff;
+  --purple: #bc8cff;
+}
+
+* {
+  box-sizing: border-box;
+  margin: 0;
+  padding: 0;
+}
+
+body {
+  background: var(--bg);
+  color: var(--text);
+  font-family: ui-monospace, 'Cascadia Code', 'Source Code Pro', Menlo, monospace;
+  font-size: 13px;
+  line-height: 1.5;
+}
+
+h1 { font-size: 1.4rem; font-weight: 600; }
+h2 { font-size: 1rem; font-weight: 600; color: var(--text-muted); text-transform: uppercase; letter-spacing: 0.05em; }
+
+.positive { color: var(--green); }
+.negative { color: var(--red); }
+.neutral  { color: var(--text-muted); }
+.bullish  { color: var(--green); }
+.bearish  { color: var(--red); }
+
+table {
+  width: 100%;
+  border-collapse: collapse;
+}
+th {
+  text-align: left;
+  padding: 6px 10px;
+  color: var(--text-muted);
+  font-weight: 400;
+  border-bottom: 1px solid var(--border);
+}
+td {
+  padding: 6px 10px;
+  border-bottom: 1px solid var(--border);
+}
+tr:last-child td { border-bottom: none; }
+tr:hover td { background: rgba(255,255,255,0.03); }
+
+.badge {
+  display: inline-block;
+  padding: 1px 6px;
+  border-radius: 4px;
+  font-size: 11px;
+  font-weight: 600;
+}
+.badge-buy    { background: rgba(63,185,80,0.2);  color: var(--green); }
+.badge-sell   { background: rgba(248,81,73,0.2);  color: var(--red); }
+.badge-hold   { background: rgba(139,148,158,0.2); color: var(--text-muted); }
+.badge-long   { background: rgba(63,185,80,0.2);  color: var(--green); }
+.badge-short  { background: rgba(248,81,73,0.2);  color: var(--red); }
+.badge-open   { background: rgba(88,166,255,0.2); color: var(--blue); }
+.badge-closed { background: rgba(139,148,158,0.2); color: var(--text-muted); }
+.badge-filled { background: rgba(63,185,80,0.15); color: var(--green); }
+.badge-paper  { background: rgba(210,153,34,0.2); color: var(--yellow); }
+.badge-live   { background: rgba(63,185,80,0.2);  color: var(--green); }
+.badge-error  { background: rgba(248,81,73,0.2);  color: var(--red); }
+.badge-warn   { background: rgba(210,153,34,0.2); color: var(--yellow); }
+.badge-info   { background: rgba(139,148,158,0.1); color: var(--text-muted); }
