@@ -22,3 +22,8 @@ dashboard/out/
 .DS_Store
 *.log
 .run-plan-logs/
+
+# plot SQLite index (derivado; rebuild com `plot rebuild-index`)
+.plot/.index.db
+.plot/.index.db-shm
+.plot/.index.db-wal

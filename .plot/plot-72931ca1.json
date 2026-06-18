@@ -1,0 +1,74 @@
+{
+  "attachments": [
+    {
+      "added_at": "2026-06-18T00:40:05.508Z",
+      "added_by": "user:eduardo-caminha",
+      "id": "att-001",
+      "ref": "soros-bf71",
+      "role": "tracks",
+      "type": "seeds_issue"
+    },
+    {
+      "added_at": "2026-06-18T00:40:10.551Z",
+      "added_by": "user:eduardo-caminha",
+      "id": "att-002",
+      "ref": "mx-1c4f4b",
+      "role": "informs",
+      "type": "mulch_record"
+    },
+    {
+      "added_at": "2026-06-18T00:40:13.269Z",
+      "added_by": "user:eduardo-caminha",
+      "id": "att-003",
+      "ref": "mx-ae48a8",
+      "role": "informs",
+      "type": "mulch_record"
+    },
+    {
+      "added_at": "2026-06-18T00:40:15.378Z",
+      "added_by": "user:eduardo-caminha",
+      "id": "att-004",
+      "ref": "mx-940c5f",
+      "role": "informs",
+      "type": "mulch_record"
+    },
+    {
+      "added_at": "2026-06-18T00:40:16.691Z",
+      "added_by": "user:eduardo-caminha",
+      "id": "att-005",
+      "ref": "mx-d480e1",
+      "role": "informs",
+      "type": "mulch_record"
+    },
+    {
+      "added_at": "2026-06-18T00:40:18.233Z",
+      "added_by": "user:eduardo-caminha",
+      "id": "att-006",
+      "ref": "mx-9e5ce8",
+      "role": "informs",
+      "type": "mulch_record"
+    }
+  ],
+  "created_at": "2026-06-18T00:40:00.295Z",
+  "id": "plot-72931ca1",
+  "intent": {
+    "constraints": [
+      "Sentimento via subscricao do Claude (claude-agent-sdk), sem API key e sem claude -p.",
+      "Paper 48h+ antes de live; stop de drawdown nao desativavel; max 3 posicoes.",
+      "Python 3.14 + deps modernas."
+    ],
+    "goal": "Bot de trading automatizado (cripto + acoes) combinando sinais deterministicos e sentimento por LLM, storage SQLite local, execucao real toggleavel por classe.",
+    "non_goals": [
+      "Decisao por debate de LLMs como no TradingAgents (research-only).",
+      "Banco cloud (Supabase); o storage e SQLite local."
+    ],
+    "success_criteria": [
+      "Paper 48h+ com sinais, sentimento e logs no SQLite local e dashboard de P&L.",
+      "Execucao real liga/desliga por classe via toggle."
+    ]
+  },
+  "name": "soros: crypto trading bot (deterministico + sentimento, SQLite local)",
+  "schema_version": 1,
+  "status": "ready",
+  "updated_at": "2026-06-18T00:40:19.865Z"
+}
