@@ -1,0 +1,130 @@
+"""Central configuration for the soros trading bot.
+
+All tuneable values live here. Runtime secrets are read from environment
+variables and never committed. Execution toggles default to OFF so no
+live order reaches an exchange until explicitly enabled.
+"""
+
+from __future__ import annotations
+
+import os
+from pathlib import Path
+
+# ---------------------------------------------------------------------------
+# Paths
+# ---------------------------------------------------------------------------
+
+_BASE_DIR = Path(__file__).parent.resolve()
+
+DB_PATH: str = os.environ.get("DB_PATH", str(_BASE_DIR / "data" / "soros.db"))
+
+# ---------------------------------------------------------------------------
+# Exchange credentials (read from environment; empty strings if unset)
+# ---------------------------------------------------------------------------
+
+BINANCE_API_KEY: str = os.environ.get("BINANCE_API_KEY", "")
+BINANCE_SECRET: str = os.environ.get("BINANCE_SECRET", "")
+
+ALPACA_API_KEY: str = os.environ.get("ALPACA_API_KEY", "")
+ALPACA_SECRET: str = os.environ.get("ALPACA_SECRET", "")
+# Base URL for Alpaca — paper endpoint by default
+ALPACA_BASE_URL: str = os.environ.get(
+    "ALPACA_BASE_URL", "https://paper-api.alpaca.markets"
+)
+
+# ---------------------------------------------------------------------------
+# Execution toggles — default OFF (paper trading until explicitly enabled)
+# ---------------------------------------------------------------------------
+
+# When False: crypto orders are simulated (dry_run). Never flip to True before
+# 48 h+ of validated paper trading.
+CRYPTO_LIVE: bool = os.environ.get("CRYPTO_LIVE", "false").lower() == "true"
+
+# When False: stock orders are simulated. Same 48 h gate as crypto.
+STOCKS_LIVE: bool = os.environ.get("STOCKS_LIVE", "false").lower() == "true"
+
+# When False: sentiment runner is skipped; bot runs on deterministic signals
+# only. Flip to True only after verifying Claude subscription access.
+SENTIMENT_ENABLED: bool = (
+    os.environ.get("SENTIMENT_ENABLED", "false").lower() == "true"
+)
+
+# ---------------------------------------------------------------------------
+# Symbols to trade
+# ---------------------------------------------------------------------------
+
+CRYPTO_SYMBOLS: list[str] = [
+    symbol.strip()
+    for symbol in os.environ.get(
+        "CRYPTO_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT"
+    ).split(",")
+    if symbol.strip()
+]
+
+STOCK_SYMBOLS: list[str] = [
+    symbol.strip()
+    for symbol in os.environ.get("STOCK_SYMBOLS", "AAPL,MSFT,NVDA").split(",")
+    if symbol.strip()
+]
+
+# ---------------------------------------------------------------------------
+# Data collection
+# ---------------------------------------------------------------------------
+
+OHLCV_TIMEFRAME: str = "1h"  # ccxt-compatible timeframe string
+OHLCV_LIMIT: int = 200  # candles fetched per call (enough for all signal windows)
+
+# How often the main loop ticks (seconds)
+LOOP_INTERVAL_SECONDS: int = int(os.environ.get("LOOP_INTERVAL_SECONDS", "3600"))
+
+# ---------------------------------------------------------------------------
+# Risk manager — hard limits (not toggleable at runtime)
+# ---------------------------------------------------------------------------
+
+MAX_DRAWDOWN_PCT: float = 0.15   # 15 % peak-to-trough stops all new orders
+MAX_OPEN_POSITIONS: int = 3      # total across both asset classes
+
+# Order sizing: fraction of equity allocated per position
+POSITION_SIZE_PCT: float = float(os.environ.get("POSITION_SIZE_PCT", "0.10"))
+
+# ---------------------------------------------------------------------------
+# Signal weights by asset class
+# crypto: {momentum, volatility, funding, sentiment}
+# stocks: {momentum, volatility, sentiment}
+# Weights must sum to 1.0 within each class.
+# ---------------------------------------------------------------------------
+
+CRYPTO_SIGNAL_WEIGHTS: dict[str, float] = {
+    "momentum": 0.35,
+    "volatility": 0.25,
+    "funding": 0.20,
+    "sentiment": 0.20,
+}
+
+STOCK_SIGNAL_WEIGHTS: dict[str, float] = {
+    "momentum": 0.45,
+    "volatility": 0.30,
+    "sentiment": 0.25,
+}
+
+# Composite score threshold to trigger a buy/sell action (else hold)
+SIGNAL_THRESHOLD: float = 0.25
+
+# Sentiment debate is only triggered when the LLM score contradicts the
+# deterministic composite, or when |composite_score| < this value.
+DEBATE_DIVERGENCE_THRESHOLD: float = 0.10
+
+# ---------------------------------------------------------------------------
+# Sentiment runner
+# ---------------------------------------------------------------------------
+
+# Maximum age (seconds) of a sentiment signal before it is considered stale
+SENTIMENT_MAX_AGE_SECONDS: int = int(
+    os.environ.get("SENTIMENT_MAX_AGE_SECONDS", "7200")
+)  # 2 h
+
+# ---------------------------------------------------------------------------
+# Logging
+# ---------------------------------------------------------------------------
+
+LOG_LEVEL: str = os.environ.get("LOG_LEVEL", "INFO").upper()
