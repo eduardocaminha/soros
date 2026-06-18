@@ -85,15 +85,19 @@ class ClaudeClient:
 
     async def _async_query(self, prompt: str) -> str | None:
         parts: list[str] = []
+        rate_limited = False
         async for event in _sdk_query(  # type: ignore[misc]
             prompt=prompt,
             options=ClaudeAgentOptions(max_turns=self._max_turns),
         ):
             if RateLimitEvent is not None and isinstance(event, RateLimitEvent):
-                raise RateLimitedError
+                rate_limited = True
+                break  # exit cleanly so aclose() is not called on a running generator
             if AssistantMessage is not None and isinstance(event, AssistantMessage):
                 for block in event.content:
                     text = getattr(block, "text", None)
                     if text:
                         parts.append(text)
+        if rate_limited:
+            raise RateLimitedError
         return "\n".join(parts) if parts else None
