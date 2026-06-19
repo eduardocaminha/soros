@@ -127,6 +127,39 @@ class TestClaudeClientQuery:
             result = client.query("prompt")
         assert result is None
 
+    def test_rate_limit_aclose_runtime_error_suppressed(self, capsys):
+        """aclose() raising RuntimeError 'already running' after a RateLimitEvent
+        is suppressed — query() returns None and no traceback appears in stderr.
+
+        Regression: asyncio.run() calls shutdown_asyncgens() after the coroutine
+        finishes; when the generator was left open after break, that call raised
+        RuntimeError and printed a traceback.  The fix explicitly awaits aclose()
+        in the finally block so the generator is CLOSED before asyncio tries.
+        """
+
+        async def _gen_bad_close():
+            try:
+                yield _FakeRateLimitEvent()
+            except GeneratorExit:
+                raise RuntimeError("aclose(): asynchronous generator is already running")
+
+        with patch.multiple(
+            "sentiment.claude_client",
+            _SDK_AVAILABLE=True,
+            _sdk_query=MagicMock(return_value=_gen_bad_close()),
+            AssistantMessage=_FakeAssistantMessage,
+            RateLimitEvent=_FakeRateLimitEvent,
+            ClaudeAgentOptions=MagicMock(return_value=MagicMock()),
+        ):
+            client = ClaudeClient()
+            result = client.query("prompt")
+
+        assert result is None, "query() must fall back to None on rate limit"
+        captured = capsys.readouterr()
+        assert "asynchronous generator is already running" not in captured.err, (
+            "RuntimeError traceback must not appear in stderr"
+        )
+
     def test_no_runtime_error_on_rate_limit_cleanup(self):
         """Generator with async cleanup does not raise RuntimeError when rate-limited.
 

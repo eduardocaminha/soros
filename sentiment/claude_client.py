@@ -86,18 +86,33 @@ class ClaudeClient:
     async def _async_query(self, prompt: str) -> str | None:
         parts: list[str] = []
         rate_limited = False
-        async for event in _sdk_query(  # type: ignore[misc]
+        gen = _sdk_query(  # type: ignore[misc]
             prompt=prompt,
             options=ClaudeAgentOptions(max_turns=self._max_turns),
-        ):
-            if RateLimitEvent is not None and isinstance(event, RateLimitEvent):
-                rate_limited = True
-                break  # exit cleanly so aclose() is not called on a running generator
-            if AssistantMessage is not None and isinstance(event, AssistantMessage):
-                for block in event.content:
-                    text = getattr(block, "text", None)
-                    if text:
-                        parts.append(text)
+        )
+        try:
+            async for event in gen:
+                if RateLimitEvent is not None and isinstance(event, RateLimitEvent):
+                    rate_limited = True
+                    break
+                if AssistantMessage is not None and isinstance(event, AssistantMessage):
+                    for block in event.content:
+                        text = getattr(block, "text", None)
+                        if text:
+                            parts.append(text)
+        finally:
+            # Explicitly close so asyncio's shutdown_asyncgens() finds the
+            # generator already closed instead of calling aclose() in the
+            # background and printing a traceback. When the SDK generator is
+            # suspended mid-flight the close raises RuntimeError "asynchronous
+            # generator is already running"; that specific error is safe to
+            # suppress — Python marks the generator CLOSED despite the raise,
+            # so the subsequent aclose() from asyncio is a no-op.
+            try:
+                await gen.aclose()
+            except RuntimeError as exc:
+                if "asynchronous generator is already running" not in str(exc):
+                    raise
         if rate_limited:
             raise RateLimitedError
         return "\n".join(parts) if parts else None
