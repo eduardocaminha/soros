@@ -231,14 +231,48 @@ de serem persistidos.
 
 ---
 
+## Dashboard
+
+O dashboard e uma aplicacao Next.js com interface em pt-BR. Inicie com:
+
+```bash
+cd dashboard && bun run dev
+# Abre em http://localhost:3000
+```
+
+### Abas
+
+| Aba | Conteudo |
+|---|---|
+| **Dashboard** | Equity curve, posicoes abertas, sinais, sentimento, screener, ordens, robustez do threshold |
+| **Alertas** | WARNINGs e ERRORs registrados pelo bot. Badge vermelho mostra quantos alertas sao novos desde a ultima visita. |
+| **Configuracoes** | Tunables editaveis em runtime (sem restart do bot). Chaves de risco sao bloqueadas. |
+
+### Badge de nao-lido (Alertas)
+
+O badge no tab "Alertas" exibe a contagem de alertas mais novos do que a ultima
+visita. O timestamp da ultima visita e persistido em `localStorage` sob a chave
+`soros_alerts_last_visit`. Abrir a aba zera o badge.
+
+### Glossario / Tooltips
+
+Cada termo tecnico do dashboard (Drawdown, Sharpe, Funding, Momentum, etc.) tem
+um tooltip em pt-BR explicando o que significa. Passe o mouse sobre o `?` ao lado
+do termo para ver a explicacao.
+
+---
+
 ## Desenvolvimento
 
 ```bash
-# Instalar dependencias
+# Instalar dependencias Python
 pip install -e ".[dev]"
 
-# Rodar todos os testes
+# Rodar todos os testes Python
 pytest
+
+# Testes do dashboard (bun)
+bun test
 
 # Qualidade
 bun run lint && bun run typecheck
