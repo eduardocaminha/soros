@@ -113,6 +113,26 @@ interface SettingRow {
   override: string | null;
 }
 
+interface SweepApiRow {
+  signal_threshold: number;
+  total_return: number;
+  cagr: number;
+  sharpe: number;
+  max_dd: number;
+  win_rate: number;
+  n_trades: number;
+}
+
+interface SweepData {
+  ts: number;
+  sweep_id: string;
+  run_ts: number;
+  current_threshold: number;
+  rows: SweepApiRow[];
+  empty?: boolean;
+  error?: string;
+}
+
 type TabId = "dashboard" | "settings";
 
 const SETTING_GROUPS: Array<{ label: string; keys: string[] }> = [
@@ -446,6 +466,105 @@ function EventsTable({ events }: { events: Event[] }) {
               <td style={{ maxWidth: 500, overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{e.message}</td>
             </tr>
           ))}
+        </tbody>
+      </table>
+    </Section>
+  );
+}
+
+function SweepTable() {
+  const [sweep, setSweep] = useState<SweepData | null>(null);
+  const [error, setError] = useState<string | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/sweep");
+      const json = (await res.json()) as SweepData;
+      if (json.error) setError(json.error);
+      else { setSweep(json); setError(null); }
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  if (error) return null;
+  if (!sweep || sweep.empty || !sweep.rows || sweep.rows.length === 0) return null;
+
+  const cur = sweep.current_threshold;
+  const bestSharpe = Math.max(...sweep.rows.map((r) => r.sharpe));
+
+  return (
+    <Section title="Threshold Robustness">
+      <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
+        Last sweep: {ts2str(sweep.run_ts)} · sweep id: <code style={{ fontSize: 10 }}>{sweep.sweep_id.slice(0, 8)}</code>
+        {" · "}
+        <span style={{ color: "var(--blue)" }}>highlighted row = current threshold ({cur})</span>
+        {" · "}
+        <span style={{ color: "var(--text-muted)" }}>goal: stable neighbourhood, not max return</span>
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Threshold</th>
+            <th>Return</th>
+            <th>CAGR</th>
+            <th>Sharpe</th>
+            <th>Max DD</th>
+            <th>Win Rate</th>
+            <th>Trades</th>
+          </tr>
+        </thead>
+        <tbody>
+          {sweep.rows.map((r) => {
+            const isCurrent = Math.abs(r.signal_threshold - cur) < 1e-9;
+            const isBestSharpe = Math.abs(r.sharpe - bestSharpe) < 1e-9 && sweep.rows.length > 1;
+            return (
+              <tr
+                key={r.signal_threshold}
+                style={
+                  isCurrent
+                    ? { background: "rgba(88,166,255,0.08)", outline: "1px solid rgba(88,166,255,0.3)" }
+                    : undefined
+                }
+              >
+                <td>
+                  <code style={{ fontSize: 12 }}>{r.signal_threshold.toFixed(2)}</code>
+                  {isCurrent && (
+                    <span className="badge badge-open" style={{ marginLeft: 6, fontSize: 10 }}>active</span>
+                  )}
+                </td>
+                <td>
+                  <span className={r.total_return >= 0 ? "positive" : "negative"}>
+                    {r.total_return >= 0 ? "+" : ""}{(r.total_return * 100).toFixed(1)}%
+                  </span>
+                </td>
+                <td>
+                  <span className={r.cagr >= 0 ? "positive" : "negative"}>
+                    {r.cagr >= 0 ? "+" : ""}{(r.cagr * 100).toFixed(1)}%
+                  </span>
+                </td>
+                <td>
+                  <span className={r.sharpe >= 1 ? "positive" : r.sharpe >= 0 ? "" : "negative"}>
+                    {r.sharpe.toFixed(2)}
+                    {isBestSharpe && <span style={{ marginLeft: 4, color: "var(--text-muted)", fontSize: 10 }}>▲</span>}
+                  </span>
+                </td>
+                <td>
+                  <span className={r.max_dd > 20 ? "negative" : r.max_dd > 10 ? "" : "positive"}>
+                    {r.max_dd.toFixed(1)}%
+                  </span>
+                </td>
+                <td>{(r.win_rate * 100).toFixed(1)}%</td>
+                <td className="neutral">{r.n_trades}</td>
+              </tr>
+            );
+          })}
         </tbody>
       </table>
     </Section>
@@ -837,6 +956,7 @@ export default function Dashboard() {
       ) : (
         <>
           <EquityCard data={data} />
+          <SweepTable />
           <PositionsTable positions={data.positions} />
           <ScreenerTable screener={data.screener ?? []} />
           <SignalsTable signals={data.signals} />
