@@ -9,9 +9,11 @@ import pytest
 from sentiment.sources_stocks import (
     StockSources,
     _fetch_cnn_fear_greed,
+    _fetch_finnhub_sentiment,
     _fetch_yahoo_news,
     _fetch_yahoo_price,
     fetch,
+    pre_score,
     to_prompt_text,
 )
 
@@ -175,6 +177,73 @@ class TestFetchYahooNews:
 
 
 # ---------------------------------------------------------------------------
+# _fetch_finnhub_sentiment
+# ---------------------------------------------------------------------------
+
+_FINNHUB_BULLISH = {
+    "sentiment": {"bullishPercent": 0.7, "bearishPercent": 0.3},
+    "companyNewsScore": 0.6,
+}
+
+_FINNHUB_BEARISH = {
+    "sentiment": {"bullishPercent": 0.2, "bearishPercent": 0.8},
+    "companyNewsScore": 0.3,
+}
+
+
+class TestFetchFinnhubSentiment:
+    def test_returns_positive_score_on_bullish(self):
+        with patch("sentiment.sources_stocks._get_json", return_value=_FINNHUB_BULLISH):
+            score = _fetch_finnhub_sentiment("AAPL", "testkey")
+        # (0.7 - 0.3) / (0.7 + 0.3) = 0.4 / 1.0 = 0.4
+        assert score == pytest.approx(0.4)
+
+    def test_returns_negative_score_on_bearish(self):
+        with patch("sentiment.sources_stocks._get_json", return_value=_FINNHUB_BEARISH):
+            score = _fetch_finnhub_sentiment("AAPL", "testkey")
+        # (0.2 - 0.8) / 1.0 = -0.6
+        assert score == pytest.approx(-0.6)
+
+    def test_returns_none_on_network_failure(self):
+        with patch("sentiment.sources_stocks._get_json", return_value=None):
+            assert _fetch_finnhub_sentiment("AAPL", "testkey") is None
+
+    def test_returns_none_when_both_zero(self):
+        data = {"sentiment": {"bullishPercent": 0.0, "bearishPercent": 0.0}}
+        with patch("sentiment.sources_stocks._get_json", return_value=data):
+            assert _fetch_finnhub_sentiment("AAPL", "testkey") is None
+
+    def test_returns_none_on_missing_sentiment_key(self):
+        with patch("sentiment.sources_stocks._get_json", return_value={"companyNewsScore": 0.5}):
+            assert _fetch_finnhub_sentiment("AAPL", "testkey") is None
+
+    def test_clamps_to_minus_one(self):
+        data = {"sentiment": {"bullishPercent": 0.0, "bearishPercent": 1.0}}
+        with patch("sentiment.sources_stocks._get_json", return_value=data):
+            score = _fetch_finnhub_sentiment("AAPL", "testkey")
+        assert score == pytest.approx(-1.0)
+
+    def test_clamps_to_plus_one(self):
+        data = {"sentiment": {"bullishPercent": 1.0, "bearishPercent": 0.0}}
+        with patch("sentiment.sources_stocks._get_json", return_value=data):
+            score = _fetch_finnhub_sentiment("AAPL", "testkey")
+        assert score == pytest.approx(1.0)
+
+    def test_includes_api_key_in_url(self):
+        captured = []
+
+        def fake_get_json(url: str):
+            captured.append(url)
+            return None
+
+        with patch("sentiment.sources_stocks._get_json", side_effect=fake_get_json):
+            _fetch_finnhub_sentiment("AAPL", "mykey123")
+
+        assert "mykey123" in captured[0]
+        assert "AAPL" in captured[0]
+
+
+# ---------------------------------------------------------------------------
 # fetch (integration of all sources)
 # ---------------------------------------------------------------------------
 
@@ -208,6 +277,120 @@ class TestFetch:
         assert result.symbol == "MSFT"
         assert result.fear_greed_value is None
         assert result.news_headlines == []
+
+    def test_finnhub_not_called_without_key(self):
+        with (
+            patch("sentiment.sources_stocks._fetch_cnn_fear_greed", return_value=(50, "Neutral")),
+            patch("sentiment.sources_stocks._fetch_yahoo_price", return_value=(0.0, 0.0)),
+            patch("sentiment.sources_stocks._fetch_yahoo_news", return_value=[]),
+            patch("sentiment.sources_stocks._fetch_finnhub_sentiment") as mock_fh,
+        ):
+            result = fetch("AAPL")
+
+        mock_fh.assert_not_called()
+        assert result.finnhub_sentiment_score is None
+
+    def test_finnhub_called_with_key(self):
+        with (
+            patch("sentiment.sources_stocks._fetch_cnn_fear_greed", return_value=(50, "Neutral")),
+            patch("sentiment.sources_stocks._fetch_yahoo_price", return_value=(0.0, 0.0)),
+            patch("sentiment.sources_stocks._fetch_yahoo_news", return_value=[]),
+            patch("sentiment.sources_stocks._fetch_finnhub_sentiment", return_value=0.4) as mock_fh,
+        ):
+            result = fetch("AAPL", finnhub_api_key="mykey")
+
+        mock_fh.assert_called_once_with("AAPL", "mykey")
+        assert result.finnhub_sentiment_score == pytest.approx(0.4)
+
+    def test_finnhub_failure_leaves_score_none(self):
+        with (
+            patch("sentiment.sources_stocks._fetch_cnn_fear_greed", return_value=(50, "Neutral")),
+            patch("sentiment.sources_stocks._fetch_yahoo_price", return_value=(0.0, 0.0)),
+            patch("sentiment.sources_stocks._fetch_yahoo_news", return_value=[]),
+            patch("sentiment.sources_stocks._fetch_finnhub_sentiment", return_value=None),
+        ):
+            result = fetch("AAPL", finnhub_api_key="mykey")
+
+        assert result.finnhub_sentiment_score is None
+
+
+# ---------------------------------------------------------------------------
+# pre_score
+# ---------------------------------------------------------------------------
+
+class TestPreScore:
+    def test_neutral_when_no_data(self):
+        sources = StockSources(symbol="AAPL", fetched_at=0)
+        assert pre_score(sources) == pytest.approx(0.0)
+
+    def test_fear_greed_50_gives_zero(self):
+        sources = StockSources(
+            symbol="AAPL", fetched_at=0, fear_greed_value=50
+        )
+        assert pre_score(sources) == pytest.approx(0.0)
+
+    def test_fear_greed_100_gives_one(self):
+        sources = StockSources(
+            symbol="AAPL", fetched_at=0, fear_greed_value=100
+        )
+        assert pre_score(sources) == pytest.approx(1.0)
+
+    def test_fear_greed_0_gives_minus_one(self):
+        sources = StockSources(
+            symbol="AAPL", fetched_at=0, fear_greed_value=0
+        )
+        assert pre_score(sources) == pytest.approx(-1.0)
+
+    def test_price_change_10pct_gives_one(self):
+        sources = StockSources(
+            symbol="AAPL", fetched_at=0, price_change_24h_pct=10.0
+        )
+        assert pre_score(sources) == pytest.approx(1.0)
+
+    def test_price_change_clamps_above_10pct(self):
+        sources = StockSources(
+            symbol="AAPL", fetched_at=0, price_change_24h_pct=25.0
+        )
+        assert pre_score(sources) == pytest.approx(1.0)
+
+    def test_finnhub_included_in_average(self):
+        sources = StockSources(
+            symbol="AAPL",
+            fetched_at=0,
+            fear_greed_value=75,  # → +0.5
+            finnhub_sentiment_score=1.0,
+        )
+        # average of (0.5, 1.0) = 0.75
+        assert pre_score(sources) == pytest.approx(0.75)
+
+    def test_finnhub_none_not_in_average(self):
+        sources = StockSources(
+            symbol="AAPL",
+            fetched_at=0,
+            fear_greed_value=75,  # → +0.5
+            finnhub_sentiment_score=None,
+        )
+        assert pre_score(sources) == pytest.approx(0.5)
+
+    def test_result_clamped_to_minus_one(self):
+        sources = StockSources(
+            symbol="AAPL",
+            fetched_at=0,
+            fear_greed_value=0,         # -1.0
+            price_change_24h_pct=-20.0, # -1.0
+            finnhub_sentiment_score=-1.0,
+        )
+        assert pre_score(sources) == pytest.approx(-1.0)
+
+    def test_result_clamped_to_plus_one(self):
+        sources = StockSources(
+            symbol="AAPL",
+            fetched_at=0,
+            fear_greed_value=100,       # +1.0
+            price_change_24h_pct=20.0,  # +1.0
+            finnhub_sentiment_score=1.0,
+        )
+        assert pre_score(sources) == pytest.approx(1.0)
 
 
 # ---------------------------------------------------------------------------
@@ -244,6 +427,20 @@ class TestToPromptText:
         text = to_prompt_text(self._full_sources())
         assert "Apple AI event" in text
         assert "Earnings beat" in text
+
+    def test_finnhub_score_included_when_present(self):
+        sources = StockSources(
+            symbol="AAPL",
+            fetched_at=1_700_000_000,
+            finnhub_sentiment_score=0.4,
+        )
+        text = to_prompt_text(sources)
+        assert "Finnhub" in text
+        assert "+0.40" in text
+
+    def test_finnhub_score_omitted_when_none(self):
+        text = to_prompt_text(self._full_sources())
+        assert "Finnhub" not in text
 
     def test_empty_sources_minimal_output(self):
         sources = StockSources(symbol="NVDA", fetched_at=1_700_000_000)
