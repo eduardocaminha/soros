@@ -73,6 +73,19 @@ interface Event {
   message: string;
 }
 
+interface ScreenerEntry {
+  symbol: string;
+  asset_class: string;
+  is_pinned: number;
+  volume_usd_24h: number;
+  composite_score: number;
+  sentiment_score: number;
+  conviction: number;
+  selected: number;
+  reason: string;
+  run_ts: number;
+}
+
 interface DashData {
   ts: number;
   equity: EquitySnap | null;
@@ -83,6 +96,7 @@ interface DashData {
   signals: Signal[];
   sentiment: SentimentRow[];
   events: Event[];
+  screener: ScreenerEntry[];
   empty?: boolean;
   error?: string;
 }
@@ -299,6 +313,53 @@ function SentimentTable({ sentiment }: { sentiment: SentimentRow[] }) {
   );
 }
 
+const REASON_LABELS: Record<string, string> = {
+  pinned: "pinned",
+  screener: "selected",
+  volume_floor: "low volume",
+  sentiment_gate: "bearish sentiment",
+  not_ranked: "not ranked",
+};
+
+function ScreenerTable({ screener }: { screener: ScreenerEntry[] }) {
+  if (screener.length === 0) return null;
+  const runTs = screener[0]?.run_ts;
+  const selected = screener.filter((e) => e.selected);
+  return (
+    <Section title="Universe & Selection" count={selected.length}>
+      <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
+        Last screener run: {runTs ? ts2str(runTs) : "—"} · {selected.length} of {screener.length} selected
+      </div>
+      <table>
+        <thead>
+          <tr>
+            <th>Symbol</th><th>Class</th><th>Type</th><th>Vol 24h (USD)</th>
+            <th>Composite</th><th>Sentiment</th><th>Conviction</th><th>Status</th>
+          </tr>
+        </thead>
+        <tbody>
+          {screener.map((e, i) => (
+            <tr key={i} style={{ opacity: e.selected ? 1 : 0.55 }}>
+              <td><b>{e.symbol}</b></td>
+              <td className="neutral">{e.asset_class}</td>
+              <td>{e.is_pinned ? <span className="badge badge-open">pinned</span> : <span className="neutral">watch</span>}</td>
+              <td className="neutral">{e.volume_usd_24h >= 1_000_000 ? `$${(e.volume_usd_24h / 1_000_000).toFixed(1)}M` : e.volume_usd_24h > 0 ? `$${(e.volume_usd_24h / 1_000).toFixed(0)}K` : "—"}</td>
+              <td>{fmtScore(e.composite_score)}</td>
+              <td>{fmtScore(e.sentiment_score)}</td>
+              <td className="neutral">{e.conviction.toFixed(3)}</td>
+              <td>
+                {e.selected
+                  ? <span className="badge badge-filled">✓ {REASON_LABELS[e.reason] ?? e.reason}</span>
+                  : <span className="badge badge-closed">{REASON_LABELS[e.reason] ?? e.reason}</span>}
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </Section>
+  );
+}
+
 function OrdersTable({ orders }: { orders: Order[] }) {
   return (
     <Section title="Recent Orders" count={orders.length}>
@@ -432,6 +493,7 @@ export default function Dashboard() {
         <>
           <EquityCard data={data} />
           <PositionsTable positions={data.positions} />
+          <ScreenerTable screener={data.screener ?? []} />
           <SignalsTable signals={data.signals} />
           <SentimentTable sentiment={data.sentiment} />
           <OrdersTable orders={data.orders} />

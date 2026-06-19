@@ -59,6 +59,17 @@ def _create_wal_db(db_path: Path) -> None:
             ts TEXT, level TEXT, component TEXT, message TEXT
         )"""
     )
+    conn.execute(
+        """CREATE TABLE screener_runs (
+            run_ts INTEGER, symbol TEXT, asset_class TEXT, is_pinned INTEGER,
+            volume_usd_24h REAL, composite_score REAL, sentiment_score REAL,
+            conviction REAL, selected INTEGER, reason TEXT
+        )"""
+    )
+    conn.execute(
+        """INSERT INTO screener_runs VALUES
+            (1700000000, 'BTC/USDT', 'crypto', 1, 2000000.0, 0.7, 0.5, 0.7, 1, 'pinned')"""
+    )
     conn.commit()
     conn.close()
 
@@ -146,3 +157,38 @@ try {{
     out = json.loads(result.stdout)
     assert out["ok"], f"unexpected error with -wal/-shm present: {out.get('error')}"
     assert len(out["rows"]) == 1
+
+
+@pytest.mark.skipif(
+    shutil.which("bun") is None,
+    reason="bun runtime not available",
+)
+def test_screener_rows_returned(tmp_path: Path) -> None:
+    """Route returns screener_runs entries for the latest run_ts."""
+    db_path = tmp_path / "soros.db"
+    _create_wal_db(db_path)
+
+    bun_script = f"""
+import {{ Database }} from "bun:sqlite";
+const db = new Database({json.dumps(str(db_path))}, {{ readwrite: true, create: false }});
+const rows = db.prepare(
+  `SELECT symbol, asset_class, is_pinned, selected, reason
+   FROM screener_runs
+   WHERE run_ts = (SELECT MAX(run_ts) FROM screener_runs)`
+).all();
+db.close();
+process.stdout.write(JSON.stringify(rows));
+"""
+    result = subprocess.run(
+        ["bun", "-e", bun_script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, f"bun process crashed: {result.stderr}"
+    rows = json.loads(result.stdout)
+    assert len(rows) == 1
+    assert rows[0]["symbol"] == "BTC/USDT"
+    assert rows[0]["is_pinned"] == 1
+    assert rows[0]["selected"] == 1
+    assert rows[0]["reason"] == "pinned"

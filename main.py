@@ -25,7 +25,7 @@ from data import stocks_collector
 from database.db import get_connection, get_logger
 from engine import order_executor, signal_aggregator, stocks_executor
 from engine.risk_manager import RiskManager
-from engine.screener import screen
+from engine.screener import save_screener_result, screen
 from sentiment import runner as sentiment_runner
 from signals import compute as signals_compute
 
@@ -98,6 +98,7 @@ def _run_cycle(rm: RiskManager) -> None:
     # 2. Screen the universe — select symbols to operate this cycle.
     #    When SCREENER_ENABLED=False (default), returns pinned only.
     screener_result = screen()
+    save_screener_result(screener_result)
     sel_crypto = screener_result.selected_crypto
     sel_stocks = screener_result.selected_stocks
     _log.info(

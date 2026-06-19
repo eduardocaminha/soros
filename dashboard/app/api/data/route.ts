@@ -97,6 +97,20 @@ export async function GET() {
        ORDER BY ts DESC LIMIT 30`
     );
 
+    let screener: Record<string, unknown>[] = [];
+    try {
+      screener = rows(
+        db,
+        `SELECT symbol, asset_class, is_pinned, volume_usd_24h, composite_score,
+                sentiment_score, conviction, selected, reason, run_ts
+         FROM screener_runs
+         WHERE run_ts = (SELECT MAX(run_ts) FROM screener_runs)
+         ORDER BY asset_class, is_pinned DESC, selected DESC, conviction DESC`
+      );
+    } catch {
+      // screener_runs absent in databases created before this feature
+    }
+
     return NextResponse.json({
       ts: Math.floor(Date.now() / 1000),
       equity,
@@ -107,6 +121,7 @@ export async function GET() {
       signals,
       sentiment,
       events,
+      screener,
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
