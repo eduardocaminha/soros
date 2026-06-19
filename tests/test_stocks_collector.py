@@ -391,7 +391,7 @@ class TestCollectOnce:
     def test_one_symbol_exception_does_not_abort_others(self, temp_db):
         call_count = 0
 
-        def _side_effect(symbol):
+        def _side_effect(symbol, limit=None):
             nonlocal call_count
             call_count += 1
             if symbol == "AAPL":
@@ -406,3 +406,56 @@ class TestCollectOnce:
             results = collect_once(["AAPL", "MSFT"])
         assert results["AAPL"] == 0
         assert results["MSFT"] == 2
+
+    def test_watchlist_symbols_collected(self, temp_db):
+        with (
+            patch.object(config, "ALPACA_API_KEY", ""),
+            patch.object(config, "ALPACA_SECRET", ""),
+            patch("data.stocks_collector._fetch_yfinance_bars", return_value=list(_CANDLES)),
+        ):
+            results = collect_once(symbols=["AAPL"], watchlist=["TSLA"])
+        assert "AAPL" in results
+        assert "TSLA" in results
+
+    def test_watchlist_symbol_in_pinned_collected_once(self, temp_db):
+        with (
+            patch.object(config, "ALPACA_API_KEY", ""),
+            patch.object(config, "ALPACA_SECRET", ""),
+            patch("data.stocks_collector._fetch_yfinance_bars", return_value=list(_CANDLES)),
+        ):
+            results = collect_once(symbols=["AAPL"], watchlist=["AAPL", "TSLA"])
+        assert list(results.keys()).count("AAPL") == 1
+        assert "TSLA" in results
+
+    def test_watchlist_uses_short_limit(self, temp_db):
+        captured: list[tuple] = []
+
+        def _side_effect(symbol, limit=None):
+            captured.append((symbol, limit))
+            return list(_CANDLES)
+
+        with (
+            patch.object(config, "ALPACA_API_KEY", ""),
+            patch.object(config, "ALPACA_SECRET", ""),
+            patch.object(config, "OHLCV_LIMIT", 200),
+            patch.object(config, "WATCHLIST_OHLCV_LIMIT", 50),
+            patch("data.stocks_collector._fetch_yfinance_bars", side_effect=_side_effect),
+        ):
+            collect_once(symbols=["AAPL"], watchlist=["TSLA"])
+
+        aapl_limit = next(limit for sym, limit in captured if sym == "AAPL")
+        tsla_limit = next(limit for sym, limit in captured if sym == "TSLA")
+        assert aapl_limit == 200
+        assert tsla_limit == 50
+
+    def test_default_watchlist_from_config(self, temp_db):
+        with (
+            patch.object(config, "ALPACA_API_KEY", ""),
+            patch.object(config, "ALPACA_SECRET", ""),
+            patch.object(config, "STOCK_SYMBOLS", ["AAPL"]),
+            patch.object(config, "STOCK_WATCHLIST", ["TSLA"]),
+            patch("data.stocks_collector._fetch_yfinance_bars", return_value=list(_CANDLES)),
+        ):
+            results = collect_once()
+        assert "AAPL" in results
+        assert "TSLA" in results
