@@ -86,18 +86,27 @@ class ClaudeClient:
     async def _async_query(self, prompt: str) -> str | None:
         parts: list[str] = []
         rate_limited = False
-        async for event in _sdk_query(  # type: ignore[misc]
-            prompt=prompt,
-            options=ClaudeAgentOptions(max_turns=self._max_turns),
-        ):
-            if RateLimitEvent is not None and isinstance(event, RateLimitEvent):
-                rate_limited = True
-                break  # exit cleanly so aclose() is not called on a running generator
-            if AssistantMessage is not None and isinstance(event, AssistantMessage):
-                for block in event.content:
-                    text = getattr(block, "text", None)
-                    if text:
-                        parts.append(text)
+        try:
+            async for event in _sdk_query(  # type: ignore[misc]
+                prompt=prompt,
+                options=ClaudeAgentOptions(max_turns=self._max_turns),
+            ):
+                if RateLimitEvent is not None and isinstance(event, RateLimitEvent):
+                    rate_limited = True
+                    break
+                if AssistantMessage is not None and isinstance(event, AssistantMessage):
+                    for block in event.content:
+                        text = getattr(block, "text", None)
+                        if text:
+                            parts.append(text)
+        except RuntimeError as exc:
+            # `break` after a RateLimitEvent calls aclose() on the SDK generator.
+            # If the generator has an active internal task, Python raises
+            # "aclose(): asynchronous generator is already running".
+            # Suppress that specific cleanup error; re-raise everything else.
+            if not (rate_limited and "asynchronous generator" in str(exc)):
+                raise
+            _log.debug("Suppressed async-gen cleanup error on rate-limit exit: %s", exc)
         if rate_limited:
             raise RateLimitedError
         return "\n".join(parts) if parts else None

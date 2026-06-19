@@ -160,3 +160,43 @@ class TestClaudeClientQuery:
 
         assert result is None, "Expected None fallback on rate limit"
         assert cleanup_ran, "Generator cleanup (finally block) must have run"
+
+    def test_no_runtime_error_when_aclose_raises_on_rate_limit(self):
+        """RuntimeError from aclose() during rate-limit exit is suppressed.
+
+        Regression: the real SDK generator can raise
+        "RuntimeError: aclose(): asynchronous generator is already running"
+        when its internal HTTP task is still active at the point aclose() is called.
+        query() must return None without printing a traceback.
+        """
+        async def _gen_raising_on_close():
+            try:
+                yield _FakeRateLimitEvent()
+                yield _FakeAssistantMessage("never returned")
+            finally:
+                # Reproduce the exact error the SDK raises when its internal task
+                # is still running at cleanup time.
+                raise RuntimeError("aclose(): asynchronous generator is already running")
+
+        import io, logging
+        buf = io.StringIO()
+        handler = logging.StreamHandler(buf)
+        logging.getLogger("sentiment.claude_client").addHandler(handler)
+        try:
+            with patch.multiple(
+                "sentiment.claude_client",
+                _SDK_AVAILABLE=True,
+                _sdk_query=MagicMock(return_value=_gen_raising_on_close()),
+                AssistantMessage=_FakeAssistantMessage,
+                RateLimitEvent=_FakeRateLimitEvent,
+                ClaudeAgentOptions=MagicMock(return_value=MagicMock()),
+            ):
+                client = ClaudeClient()
+                result = client.query("prompt")
+        finally:
+            logging.getLogger("sentiment.claude_client").removeHandler(handler)
+
+        assert result is None, "Expected None fallback on rate limit"
+        assert "aclose" not in buf.getvalue(), (
+            "RuntimeError from aclose should not appear in log output as an error"
+        )
