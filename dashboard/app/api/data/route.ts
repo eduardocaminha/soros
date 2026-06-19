@@ -3,6 +3,7 @@
 export const dynamic = "force-dynamic";
 
 import path from "path";
+import { existsSync } from "fs";
 import { NextResponse } from "next/server";
 import type { Database as BunDatabase } from "bun:sqlite";
 
@@ -22,10 +23,17 @@ function rows<T = Record<string, unknown>>(
 }
 
 export async function GET() {
+  if (!existsSync(DB_PATH)) {
+    return NextResponse.json({ empty: true, ts: Math.floor(Date.now() / 1000) });
+  }
+
   let db: BunDatabase | null = null;
   try {
     const { Database } = (await import("bun:sqlite")) as typeof import("bun:sqlite");
-    db = new Database(DB_PATH, { readonly: true, create: false });
+    // Open read-write (not readonly) so bun:sqlite handles WAL mode correctly when
+    // -wal/-shm are absent (checkpointed state with bot stopped). We only issue
+    // SELECT queries so nothing is ever written.
+    db = new Database(DB_PATH, { readwrite: true, create: false });
 
     const equity = db
       .prepare(
@@ -102,11 +110,7 @@ export async function GET() {
     });
   } catch (err) {
     const message = err instanceof Error ? err.message : String(err);
-    if (
-      message.includes("no such file") ||
-      message.includes("ENOENT") ||
-      message.includes("unable to open")
-    ) {
+    if (message.includes("no such file") || message.includes("ENOENT")) {
       return NextResponse.json({ empty: true, ts: Math.floor(Date.now() / 1000) });
     }
     return NextResponse.json({ error: message }, { status: 500 });
