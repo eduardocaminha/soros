@@ -174,3 +174,14 @@ CREATE TABLE IF NOT EXISTS screener_runs (
 
 CREATE INDEX IF NOT EXISTS ix_screener_run_ts
     ON screener_runs (run_ts DESC);
+
+-- ─────────────────────────────────────────────
+-- Runtime settings overrides (key -> value)
+-- Only keys in SETTINGS_ALLOWLIST may be written here.
+-- Execution toggles and hard risk limits are intentionally absent.
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS settings (
+    key        TEXT    NOT NULL PRIMARY KEY,
+    value      TEXT    NOT NULL,
+    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+);

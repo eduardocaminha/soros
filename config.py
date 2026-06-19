@@ -247,6 +247,50 @@ SENTIMENT_MAX_AGE_SECONDS: int = int(
 )  # 2 h
 
 # ---------------------------------------------------------------------------
+# Settings ALLOWLIST — keys editable at runtime via the settings table
+# ---------------------------------------------------------------------------
+# Deny-by-default: any key NOT in this dict is locked / read-only.
+# Execution toggles (CRYPTO_LIVE, STOCKS_LIVE, SENTIMENT_ENABLED) and hard
+# risk limits (MAX_DRAWDOWN_PCT, MAX_OPEN_POSITIONS) are intentionally ABSENT
+# and can never be written to the settings table.
+#
+# Each entry: {"type": <python type>, "min": <lower bound|None>, "max": <upper bound|None>}
+SETTINGS_ALLOWLIST: dict[str, dict] = {
+    "LOOP_INTERVAL_SECONDS":       {"type": int,   "min": 60,    "max": 86400},
+    "SIGNAL_THRESHOLD":            {"type": float, "min": 0.0,   "max": 1.0},
+    "DEBATE_DIVERGENCE_THRESHOLD": {"type": float, "min": 0.0,   "max": 1.0},
+    "SCREENER_ENABLED":            {"type": bool,  "min": None,  "max": None},
+    "SCREENER_TOP_N":              {"type": int,   "min": 1,     "max": 20},
+    "SCREENER_MIN_VOLUME_USD":     {"type": float, "min": 0.0,   "max": None},
+    "MARKETCAP_TOP_N":             {"type": int,   "min": 1,     "max": 200},
+    "MARKETCAP_REFRESH_SECS":      {"type": int,   "min": 60,    "max": 86400},
+    "DEX_BOOST_MULTIPLIER":        {"type": float, "min": 1.0,   "max": 10.0},
+    "DEX_SCAN_CACHE_SECS":         {"type": int,   "min": 60,    "max": 3600},
+    "GEM_VOLUME_SURGE_MULTIPLIER": {"type": float, "min": 1.0,   "max": 20.0},
+    "GEM_ROC_MIN_PCT":             {"type": float, "min": 0.0,   "max": 50.0},
+    "GEM_TOP_N":                   {"type": int,   "min": 1,     "max": 50},
+    "GEM_MIN_VOLUME_USD":          {"type": float, "min": 0.0,   "max": None},
+    "IGNITION_WEIGHT":             {"type": float, "min": 0.0,   "max": 1.0},
+    "GEM_POSITION_SIZE_PCT":       {"type": float, "min": 0.01,  "max": 0.5},
+    "GEM_TRAILING_STOP_PCT":       {"type": float, "min": 0.0,   "max": 0.5},
+    "POSITION_SIZE_PCT":           {"type": float, "min": 0.01,  "max": 0.5},
+    "WATCHLIST_OHLCV_LIMIT":       {"type": int,   "min": 26,    "max": 500},
+    "SENTIMENT_MAX_AGE_SECONDS":   {"type": int,   "min": 300,   "max": 86400},
+    "INITIAL_CAPITAL":             {"type": float, "min": 100.0, "max": None},
+    "FEE_PCT":                     {"type": float, "min": 0.0,   "max": 0.1},
+    "SLIPPAGE_PCT":                {"type": float, "min": 0.0,   "max": 0.1},
+}
+
+# Keys that are permanently locked (for UI display — read-only / visually flagged)
+SETTINGS_LOCKED: frozenset[str] = frozenset({
+    "CRYPTO_LIVE",
+    "STOCKS_LIVE",
+    "SENTIMENT_ENABLED",
+    "MAX_DRAWDOWN_PCT",
+    "MAX_OPEN_POSITIONS",
+})
+
+# ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
 

@@ -82,6 +82,19 @@ class Database:
             conn.execute("ALTER TABLE positions ADD COLUMN trailing_peak_price REAL")
             conn.commit()
 
+        tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+        if "settings" not in tables:
+            conn.execute(
+                """
+                CREATE TABLE IF NOT EXISTS settings (
+                    key        TEXT    NOT NULL PRIMARY KEY,
+                    value      TEXT    NOT NULL,
+                    updated_at INTEGER NOT NULL DEFAULT (unixepoch())
+                )
+                """
+            )
+            conn.commit()
+
 
 # Module-level singleton; components call get_connection() instead of
 # instantiating Database directly.
