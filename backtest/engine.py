@@ -11,6 +11,10 @@ Sentiment is excluded from backtest signals: no LLM replay is possible.
 The deterministic composite is computed with the same _deterministic_composite
 logic from signals.compute (weights re-normalised to exclude sentiment).
 
+When use_screener=True (or CLI --screener), the symbol list is derived from
+engine.screener.screen() so the backtest runs the same universe the live loop
+would pick — avoiding selection-logic drift.
+
 Usage:
     from backtest.engine import BacktestConfig, run_backtest, print_result
     cfg = BacktestConfig(
@@ -21,8 +25,13 @@ Usage:
     result = run_backtest(cfg)
     print_result(result)
 
+    # Or let the screener choose symbols:
+    cfg = BacktestConfig(symbols=[], start_ts=..., end_ts=..., use_screener=True)
+    result = run_backtest(cfg)
+
 CLI:
     python -m backtest --symbols BTC/USDT:crypto --start 2024-01-01 --end 2024-12-31
+    python -m backtest --screener --start 2024-01-01 --end 2024-12-31
 """
 
 from __future__ import annotations
@@ -56,6 +65,9 @@ class BacktestConfig:
     max_drawdown_pct: float = field(default=None)   # type: ignore[assignment]
     signal_threshold: float = field(default=None)   # type: ignore[assignment]
     window: int = 200  # candle lookback for signal computation
+    # When True, symbols are derived from engine.screener.screen() at runtime,
+    # ensuring the backtest reflects the same selection logic as the live loop.
+    use_screener: bool = False
 
     def __post_init__(self) -> None:
         if self.initial_capital is None:
@@ -258,8 +270,23 @@ def run_backtest(
     Returns:
         BacktestResult with all metrics and the full equity curve + trade list.
     """
+    # Resolve effective symbol list — screener takes precedence when enabled.
+    if cfg.use_screener:
+        from engine.screener import screen
+        screener_result = screen()
+        effective_symbols: list[tuple[str, str]] = (
+            [(sym, "crypto") for sym in screener_result.selected_crypto]
+            + [(sym, "stocks") for sym in screener_result.selected_stocks]
+        )
+    else:
+        effective_symbols = list(cfg.symbols)
+
     if prices_df is None:
+        # Temporarily swap symbols so _load_prices_from_db uses the effective list.
+        _orig_symbols = cfg.symbols
+        cfg.symbols = effective_symbols
         prices_df = _load_prices_from_db(cfg)
+        cfg.symbols = _orig_symbols
 
     # All unique timestamps within the backtest range, sorted ascending.
     in_range = prices_df[prices_df["ts"].between(cfg.start_ts, cfg.end_ts)]
@@ -292,7 +319,7 @@ def run_backtest(
     # Pre-group prices by symbol for O(1) window slicing.
     by_symbol: dict[str, pd.DataFrame] = {
         sym: prices_df[prices_df["symbol"] == sym].sort_values("ts").reset_index(drop=True)
-        for sym, _ in cfg.symbols
+        for sym, _ in effective_symbols
     }
 
     for ts in timestamps:
@@ -320,7 +347,7 @@ def run_backtest(
         drawdown = (peak_equity - equity) / peak_equity if peak_equity > 0.0 else 0.0
 
         # Process each symbol.
-        for sym, asset_class in cfg.symbols:
+        for sym, asset_class in effective_symbols:
             close = current_closes.get(sym)
             if close is None:
                 continue
@@ -541,8 +568,14 @@ def _parse_args(argv: list[str] | None = None):
     )
     p.add_argument(
         "--symbols",
-        required=True,
-        help="Comma-separated SYMBOL:asset_class pairs, e.g. BTC/USDT:crypto,AAPL:stocks",
+        default=None,
+        help="Comma-separated SYMBOL:asset_class pairs, e.g. BTC/USDT:crypto,AAPL:stocks. "
+             "Required unless --screener is set.",
+    )
+    p.add_argument(
+        "--screener",
+        action="store_true",
+        help="Derive the symbol list from the screener (engine.screener.screen()) instead of --symbols.",
     )
     p.add_argument("--start", required=True, type=_parse_date, help="Start date YYYY-MM-DD (UTC)")
     p.add_argument("--end", required=True, type=_parse_date, help="End date YYYY-MM-DD (UTC)")
@@ -553,7 +586,13 @@ def _parse_args(argv: list[str] | None = None):
     p.add_argument("--db", default=None, help="Override DB_PATH")
 
     args = p.parse_args(argv)
-    args.symbols = [_parse_symbol(s.strip()) for s in args.symbols.split(",")]
+    if not args.screener and not args.symbols:
+        p.error("--symbols is required unless --screener is set")
+    args.symbols = (
+        [_parse_symbol(s.strip()) for s in args.symbols.split(",")]
+        if args.symbols
+        else []
+    )
     return args
 
 
@@ -573,6 +612,7 @@ def main(argv: list[str] | None = None) -> None:
         start_ts=args.start,
         end_ts=args.end,
         initial_capital=args.capital,  # None → __post_init__ fills from config
+        use_screener=args.screener,
     )
 
     result = run_backtest(cfg)
