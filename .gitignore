@@ -27,3 +27,8 @@ dashboard/out/
 .plot/.index.db
 .plot/.index.db-shm
 .plot/.index.db-wal
+
+# SQLite runtime DB (dados de runtime; data/ tem codigo, ignorar so os .db)
+data/*.db
+data/*.db-shm
+data/*.db-wal
