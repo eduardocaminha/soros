@@ -2,8 +2,8 @@
 
 For each symbol:
   1. Fetch sentiment sources (crypto or stocks)
-  2. Run single-pass analyst → AnalystResult
-  3. Run bull/bear debate when signals diverge → DebateResult
+  2. Compute pre-scored aggregate (no LLM) → base score
+  3. Run bull/bear debate only when quant and sentiment diverge → DebateResult
   4. Persist to sentiment_signals (SQLite)
 
 Call ``run()`` once per main-loop cycle, passing the latest deterministic
@@ -14,12 +14,12 @@ from __future__ import annotations
 
 import json
 import logging
+import time
 from dataclasses import dataclass
 
 import config
 from database.db import get_connection
 from sentiment import analyst, debate, sources_crypto, sources_stocks
-from sentiment.analyst import heuristic_score
 from sentiment.claude_client import ClaudeClient
 from sentiment.debate import DebateResult
 
@@ -54,20 +54,28 @@ def _analyse_symbol(
     client: ClaudeClient,
     det_score: float,
 ) -> DebateResult:
-    """Fetch sources, run analyst, optionally debate, and return final result."""
+    """Fetch sources, compute pre-score aggregate (no LLM), optionally debate."""
     if asset_class == "crypto":
-        sources = sources_crypto.fetch(symbol)
+        sources = sources_crypto.fetch(
+            symbol, cryptopanic_api_key=config.CRYPTOPANIC_API_KEY
+        )
+        base_score = sources_crypto.pre_score(sources)
         sources_text = sources_crypto.to_prompt_text(sources)
-        fallback = heuristic_score(sources.price_change_24h_pct)
     else:
-        sources = sources_stocks.fetch(symbol)
+        sources = sources_stocks.fetch(
+            symbol, finnhub_api_key=config.FINNHUB_API_KEY
+        )
+        base_score = sources_stocks.pre_score(sources)
         sources_text = sources_stocks.to_prompt_text(sources)
-        fallback = heuristic_score(sources.price_change_24h_pct)
 
-    analyst_result = analyst.analyse(
-        symbol, sources_text, client, fallback_score=fallback
+    base_result = analyst.AnalystResult(
+        symbol=symbol,
+        score=base_score,
+        rationale="pre-scored aggregate",
+        analysed_at=int(time.time()),
+        llm_used=False,
     )
-    return debate.debate(sources_text, analyst_result, det_score, client)
+    return debate.debate(sources_text, base_result, det_score, client)
 
 
 def _persist(record: SentimentRecord) -> None:
