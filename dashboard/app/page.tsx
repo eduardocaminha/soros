@@ -137,11 +137,11 @@ type TabId = "dashboard" | "settings";
 
 const SETTING_GROUPS: Array<{ label: string; keys: string[] }> = [
   { label: "Loop", keys: ["LOOP_INTERVAL_SECONDS"] },
-  { label: "Signals", keys: ["SIGNAL_THRESHOLD", "DEBATE_DIVERGENCE_THRESHOLD"] },
+  { label: "Sinais", keys: ["SIGNAL_THRESHOLD", "DEBATE_DIVERGENCE_THRESHOLD"] },
   { label: "Screener", keys: ["SCREENER_ENABLED", "SCREENER_TOP_N", "SCREENER_MIN_VOLUME_USD"] },
   { label: "Market Cap / DEX", keys: ["MARKETCAP_TOP_N", "MARKETCAP_REFRESH_SECS", "DEX_BOOST_MULTIPLIER", "DEX_SCAN_CACHE_SECS"] },
   { label: "Gems", keys: ["GEM_VOLUME_SURGE_MULTIPLIER", "GEM_ROC_MIN_PCT", "GEM_TOP_N", "GEM_MIN_VOLUME_USD", "IGNITION_WEIGHT", "GEM_POSITION_SIZE_PCT", "GEM_TRAILING_STOP_PCT"] },
-  { label: "Position & Fees", keys: ["POSITION_SIZE_PCT", "WATCHLIST_OHLCV_LIMIT", "SENTIMENT_MAX_AGE_SECONDS", "INITIAL_CAPITAL", "FEE_PCT", "SLIPPAGE_PCT"] },
+  { label: "Posição & Taxas", keys: ["POSITION_SIZE_PCT", "WATCHLIST_OHLCV_LIMIT", "SENTIMENT_MAX_AGE_SECONDS", "INITIAL_CAPITAL", "FEE_PCT", "SLIPPAGE_PCT"] },
 ];
 
 // ─── Helpers ─────────────────────────────────────────────────────────────────
@@ -218,16 +218,16 @@ function EquityCard({ data }: { data: DashData }) {
         {eq ? (
           <span className={eq.drawdown_pct > 10 ? "negative" : eq.drawdown_pct > 5 ? "" : "positive"}>
             {fmt(eq.drawdown_pct, 1)}%{" "}
-            <span className="neutral" style={{ fontSize: 11 }}>/ 15% limit</span>
+            <span className="neutral" style={{ fontSize: 11 }}>/ limite 15%</span>
           </span>
         ) : <span className="neutral">—</span>}
       </Card>
 
-      <Card label="Unrealized P&L">
+      <Card label="P&L Não Realizado">
         {data.positions.length ? fmtPnl(totalUnrealized) : <span className="neutral">—</span>}
       </Card>
 
-      <Card label="Realized P&L">
+      <Card label="P&L Realizado">
         {fmtPnl(data.realizedPnl)}
       </Card>
 
@@ -255,15 +255,15 @@ function Card({ label, children, wide }: { label: string; children: React.ReactN
 
 function PositionsTable({ positions }: { positions: Position[] }) {
   return (
-    <Section title="Open Positions" count={positions.length}>
+    <Section title="Posições Abertas" count={positions.length}>
       {positions.length === 0 ? (
-        <p className="neutral" style={{ padding: "12px 10px" }}>No open positions.</p>
+        <p className="neutral" style={{ padding: "12px 10px" }}>Sem posições abertas.</p>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>Symbol</th><th>Side</th><th>Qty</th><th>Entry</th><th>Current</th>
-              <th>Unrealized</th><th>Mode</th><th>Opened</th>
+              <th>Symbol</th><th>Lado</th><th>Qtd</th><th>Entrada</th><th>Atual</th>
+              <th>Não Real.</th><th>Modo</th><th>Abertura</th>
             </tr>
           </thead>
           <tbody>
@@ -288,15 +288,15 @@ function PositionsTable({ positions }: { positions: Position[] }) {
 
 function SignalsTable({ signals }: { signals: Signal[] }) {
   return (
-    <Section title="Latest Signals">
+    <Section title="Sinais Recentes">
       {signals.length === 0 ? (
-        <p className="neutral" style={{ padding: "12px 10px" }}>No signals yet.</p>
+        <p className="neutral" style={{ padding: "12px 10px" }}>Sem sinais ainda.</p>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>Symbol</th><th>Class</th><th>Momentum</th><th>Volatility</th>
-              <th>Funding</th><th>Composite</th><th>Action</th><th>At</th>
+              <th>Symbol</th><th>Classe</th><th>Momentum</th><th>Volatilidade</th>
+              <th>Funding</th><th>Composite</th><th>Ação</th><th>Em</th>
             </tr>
           </thead>
           <tbody>
@@ -321,15 +321,15 @@ function SignalsTable({ signals }: { signals: Signal[] }) {
 
 function SentimentTable({ sentiment }: { sentiment: SentimentRow[] }) {
   return (
-    <Section title="Sentiment">
+    <Section title="Sentimento">
       {sentiment.length === 0 ? (
-        <p className="neutral" style={{ padding: "12px 10px" }}>No sentiment data yet.</p>
+        <p className="neutral" style={{ padding: "12px 10px" }}>Sem dados de sentimento ainda.</p>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>Symbol</th><th>Class</th><th>Score</th><th>Label</th>
-              <th>Confidence</th><th>Debate</th><th>At</th>
+              <th>Symbol</th><th>Classe</th><th>Score</th><th>Rótulo</th>
+              <th>Confiança</th><th>Debate</th><th>Em</th>
             </tr>
           </thead>
           <tbody>
@@ -352,11 +352,11 @@ function SentimentTable({ sentiment }: { sentiment: SentimentRow[] }) {
 }
 
 const REASON_LABELS: Record<string, string> = {
-  pinned: "pinned",
-  screener: "selected",
-  volume_floor: "low volume",
-  sentiment_gate: "bearish sentiment",
-  not_ranked: "not ranked",
+  pinned: "fixado",
+  screener: "selecionado",
+  volume_floor: "vol. baixo",
+  sentiment_gate: "sentimento baixista",
+  not_ranked: "sem ranking",
 };
 
 const ORIGIN_LABELS: Record<string, string> = {
@@ -377,15 +377,15 @@ function ScreenerTable({ screener }: { screener: ScreenerEntry[] }) {
   const runTs = screener[0]?.run_ts;
   const selected = screener.filter((e) => e.selected);
   return (
-    <Section title="Universe & Selection" count={selected.length}>
+    <Section title="Universo & Seleção" count={selected.length}>
       <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
-        Last screener run: {runTs ? ts2str(runTs) : "—"} · {selected.length} of {screener.length} selected
+        Último screener: {runTs ? ts2str(runTs) : "—"} · {selected.length} de {screener.length} selecionados
       </div>
       <table>
         <thead>
           <tr>
-            <th>Symbol</th><th>Class</th><th>Origin</th><th>Type</th><th>Vol 24h (USD)</th>
-            <th>Composite</th><th>Sentiment</th><th>Conviction</th><th>Status</th>
+            <th>Symbol</th><th>Classe</th><th>Origem</th><th>Tipo</th><th>Vol 24h (USD)</th>
+            <th>Composite</th><th>Sentimento</th><th>Convicção</th><th>Estado</th>
           </tr>
         </thead>
         <tbody>
@@ -394,7 +394,7 @@ function ScreenerTable({ screener }: { screener: ScreenerEntry[] }) {
               <td><b>{e.symbol}</b></td>
               <td className="neutral">{e.asset_class}</td>
               <td>{originBadge(e.origin)}</td>
-              <td>{e.is_pinned ? <span className="badge badge-open">pinned</span> : <span className="neutral">watch</span>}</td>
+              <td>{e.is_pinned ? <span className="badge badge-open">fixado</span> : <span className="neutral">monitorado</span>}</td>
               <td className="neutral">{e.volume_usd_24h >= 1_000_000 ? `$${(e.volume_usd_24h / 1_000_000).toFixed(1)}M` : e.volume_usd_24h > 0 ? `$${(e.volume_usd_24h / 1_000).toFixed(0)}K` : "—"}</td>
               <td>{fmtScore(e.composite_score)}</td>
               <td>{fmtScore(e.sentiment_score)}</td>
@@ -414,15 +414,15 @@ function ScreenerTable({ screener }: { screener: ScreenerEntry[] }) {
 
 function OrdersTable({ orders }: { orders: Order[] }) {
   return (
-    <Section title="Recent Orders" count={orders.length}>
+    <Section title="Ordens Recentes" count={orders.length}>
       {orders.length === 0 ? (
-        <p className="neutral" style={{ padding: "12px 10px" }}>No orders yet.</p>
+        <p className="neutral" style={{ padding: "12px 10px" }}>Sem ordens ainda.</p>
       ) : (
         <table>
           <thead>
             <tr>
-              <th>Symbol</th><th>Side</th><th>Qty</th><th>Price</th>
-              <th>Type</th><th>Status</th><th>Mode</th><th>Created</th>
+              <th>Symbol</th><th>Lado</th><th>Qtd</th><th>Preço</th>
+              <th>Tipo</th><th>Estado</th><th>Modo</th><th>Criada</th>
             </tr>
           </thead>
           <tbody>
@@ -448,10 +448,10 @@ function OrdersTable({ orders }: { orders: Order[] }) {
 function EventsTable({ events }: { events: Event[] }) {
   if (events.length === 0) return null;
   return (
-    <Section title="Alerts">
+    <Section title="Alertas">
       <table>
         <thead>
-          <tr><th>Time</th><th>Level</th><th>Component</th><th>Message</th></tr>
+          <tr><th>Hora</th><th>Nível</th><th>Componente</th><th>Mensagem</th></tr>
         </thead>
         <tbody>
           {events.map((e, i) => (
@@ -500,19 +500,19 @@ function SweepTable() {
   const bestSharpe = Math.max(...sweep.rows.map((r) => r.sharpe));
 
   return (
-    <Section title="Threshold Robustness">
+    <Section title="Robustez do Threshold">
       <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
-        Last sweep: {ts2str(sweep.run_ts)} · sweep id: <code style={{ fontSize: 10 }}>{sweep.sweep_id.slice(0, 8)}</code>
+        Último sweep: {ts2str(sweep.run_ts)} · id do sweep: <code style={{ fontSize: 10 }}>{sweep.sweep_id.slice(0, 8)}</code>
         {" · "}
-        <span style={{ color: "var(--blue)" }}>highlighted row = current threshold ({cur})</span>
+        <span style={{ color: "var(--blue)" }}>linha destacada = threshold atual ({cur})</span>
         {" · "}
-        <span style={{ color: "var(--text-muted)" }}>goal: stable neighbourhood, not max return</span>
+        <span style={{ color: "var(--text-muted)" }}>objetivo: vizinhança estável, não retorno máximo</span>
       </div>
       <table>
         <thead>
           <tr>
             <th>Threshold</th>
-            <th>Return</th>
+            <th>Retorno</th>
             <th>CAGR</th>
             <th>Sharpe</th>
             <th>Max DD</th>
@@ -536,7 +536,7 @@ function SweepTable() {
                 <td>
                   <code style={{ fontSize: 12 }}>{r.signal_threshold.toFixed(2)}</code>
                   {isCurrent && (
-                    <span className="badge badge-open" style={{ marginLeft: 6, fontSize: 10 }}>active</span>
+                    <span className="badge badge-open" style={{ marginLeft: 6, fontSize: 10 }}>ativo</span>
                   )}
                 </td>
                 <td>
@@ -606,7 +606,7 @@ function LockedRow({ setting }: { setting: SettingRow }) {
           <span style={{ fontSize: 12 }}>{String(setting.effectiveValue)}</span>
         )}
       </td>
-      <td><span className="badge badge-error" style={{ fontSize: 10 }}>locked</span></td>
+      <td><span className="badge badge-error" style={{ fontSize: 10 }}>bloqueado</span></td>
     </tr>
   );
 }
@@ -642,11 +642,11 @@ function EditableRow({ setting, onRefresh }: { setting: SettingRow; onRefresh: (
       });
       if (res.ok) {
         setDirty(false);
-        showFlash(true, "saved");
+        showFlash(true, "salvo");
         onRefresh();
       } else {
         const json = (await res.json()) as { error?: string };
-        showFlash(false, json.error ?? "error");
+        showFlash(false, json.error ?? "erro");
       }
     } catch (e) {
       showFlash(false, String(e));
@@ -667,12 +667,12 @@ function EditableRow({ setting, onRefresh }: { setting: SettingRow; onRefresh: (
           body: JSON.stringify({ value: checked }),
         });
         if (res.ok) {
-          showFlash(true, "saved");
+          showFlash(true, "salvo");
           onRefresh();
         } else {
           setDraft(prev);
           const json = (await res.json()) as { error?: string };
-          showFlash(false, json.error ?? "error");
+          showFlash(false, json.error ?? "erro");
         }
       } catch (e) {
         setDraft(prev);
@@ -689,10 +689,10 @@ function EditableRow({ setting, onRefresh }: { setting: SettingRow; onRefresh: (
       const res = await fetch(`/api/settings/${setting.key}`, { method: "DELETE" });
       if (res.ok) {
         setDirty(false);
-        showFlash(true, "reset");
+        showFlash(true, "redefinido");
         onRefresh();
       } else {
-        showFlash(false, "reset failed");
+        showFlash(false, "falha ao redefinir");
       }
     } catch (e) {
       showFlash(false, String(e));
@@ -725,7 +725,7 @@ function EditableRow({ setting, onRefresh }: { setting: SettingRow; onRefresh: (
       <td>
         <code style={{ fontSize: 11 }}>{setting.key}</code>
         {setting.override !== null && (
-          <span className="badge badge-warn" style={{ marginLeft: 6, fontSize: 10 }}>override</span>
+          <span className="badge badge-warn" style={{ marginLeft: 6, fontSize: 10 }}>substituído</span>
         )}
       </td>
       <td className="neutral" style={{ fontSize: 11 }}>{setting.type}</td>
@@ -769,7 +769,7 @@ function EditableRow({ setting, onRefresh }: { setting: SettingRow; onRefresh: (
             disabled={saving}
             style={{ ...btnBase, color: "var(--blue)", border: "1px solid rgba(88,166,255,0.3)" }}
           >
-            {saving ? "…" : "save"}
+            {saving ? "…" : "salvar"}
           </button>
         )}
         {setting.override !== null && !dirty && (
@@ -778,7 +778,7 @@ function EditableRow({ setting, onRefresh }: { setting: SettingRow; onRefresh: (
             disabled={saving}
             style={{ ...btnBase, color: "var(--text-muted)", border: "1px solid var(--border)" }}
           >
-            reset
+            redefinir
           </button>
         )}
         {flash && (
@@ -821,7 +821,7 @@ function SettingsTab() {
       </div>
     );
   }
-  if (!settings) return <p className="neutral">Loading settings…</p>;
+  if (!settings) return <p className="neutral">Carregando configurações…</p>;
 
   const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s]));
   const lockedSettings = settings.filter((s) => s.locked);
@@ -829,8 +829,8 @@ function SettingsTab() {
   return (
     <>
       <div style={{ color: "var(--text-muted)", fontSize: 11, marginBottom: 16 }}>
-        {lastUpdate ? <>last refreshed: {lastUpdate.toLocaleTimeString("pt-BR")} · </> : null}
-        polls every {POLL_MS / 1000}s · changes take effect on the next bot cycle
+        {lastUpdate ? <>atualizado: {lastUpdate.toLocaleTimeString("pt-BR")} · </> : null}
+        atualiza a cada {POLL_MS / 1000}s · alterações entram em vigor no próximo ciclo do bot
       </div>
 
       {SETTING_GROUPS.map((group) => {
@@ -841,10 +841,10 @@ function SettingsTab() {
             <table>
               <thead>
                 <tr>
-                  <th style={{ width: "42%" }}>Key</th>
-                  <th>Type</th>
-                  <th>Range</th>
-                  <th>Value</th>
+                  <th style={{ width: "42%" }}>Chave</th>
+                  <th>Tipo</th>
+                  <th>Intervalo</th>
+                  <th>Valor</th>
                   <th></th>
                 </tr>
               </thead>
@@ -858,17 +858,17 @@ function SettingsTab() {
         );
       })}
 
-      <Section title="Execution & Risk — locked">
+      <Section title="Execução & Risco — bloqueado">
         <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
-          Cannot be changed from the UI. Edit .env and restart the bot to modify these.
+          Não pode ser alterado pela UI. Edite o .env e reinicie o bot para modificar.
         </div>
         <table>
           <thead>
             <tr>
-              <th style={{ width: "42%" }}>Key</th>
-              <th>Type</th>
-              <th>Value</th>
-              <th>Status</th>
+              <th style={{ width: "42%" }}>Chave</th>
+              <th>Tipo</th>
+              <th>Valor</th>
+              <th>Estado</th>
             </tr>
           </thead>
           <tbody>
@@ -930,11 +930,11 @@ export default function Dashboard() {
         <h1>Soros</h1>
         <div style={{ display: "flex", gap: 4 }}>
           <button style={tabBtnStyle("dashboard")} onClick={() => setActiveTab("dashboard")}>Dashboard</button>
-          <button style={tabBtnStyle("settings")} onClick={() => setActiveTab("settings")}>Settings</button>
+          <button style={tabBtnStyle("settings")} onClick={() => setActiveTab("settings")}>Configurações</button>
         </div>
         <div style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 11 }}>
-          {lastUpdate ? <>last update: {lastUpdate.toLocaleTimeString("pt-BR")}{" · "}</> : null}
-          polls every {POLL_MS / 1000}s
+          {lastUpdate ? <>última atualização: {lastUpdate.toLocaleTimeString("pt-BR")}{" · "}</> : null}
+          atualiza a cada {POLL_MS / 1000}s
         </div>
       </div>
 
@@ -947,11 +947,11 @@ export default function Dashboard() {
       {activeTab === "settings" ? (
         <SettingsTab />
       ) : !data ? (
-        <p className="neutral">Loading…</p>
+        <p className="neutral">Carregando…</p>
       ) : data.empty ? (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "40px 20px", textAlign: "center" }}>
-          <p className="neutral">Database not found yet.</p>
-          <p className="neutral" style={{ marginTop: 8, fontSize: 11 }}>Start the bot first: <code>python main.py</code></p>
+          <p className="neutral">Banco de dados ainda não encontrado.</p>
+          <p className="neutral" style={{ marginTop: 8, fontSize: 11 }}>Inicie o bot primeiro: <code>python main.py</code></p>
         </div>
       ) : (
         <>
