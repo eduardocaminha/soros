@@ -58,6 +58,7 @@ def _insert_signal(
     mom: float = 0.3,
     vol: float = 0.2,
     fund: float | None = 0.1,
+    ign: float | None = None,
     composite: float = 0.2,
     action: str = "hold",
     ts: int | None = None,
@@ -69,10 +70,10 @@ def _insert_signal(
         """
         INSERT INTO signals
             (symbol, asset_class, ts, momentum_score, volatility_score,
-             funding_score, composite_score, action)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             funding_score, ignition_score, composite_score, action)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (symbol, asset_class, ts, mom, vol, fund, composite, action),
+        (symbol, asset_class, ts, mom, vol, fund, ign, composite, action),
     )
     row_id = cur.lastrowid
     conn.commit()
@@ -122,7 +123,7 @@ class TestFinalComposite:
         assert -1.0 <= score <= 1.0
 
     def test_sentiment_weight_matches_config(self):
-        # Only sentiment differs → difference should reflect its weight
+        # Only sentiment differs (no ignition) → difference reflects sentiment weight
         w = config.CRYPTO_SIGNAL_WEIGHTS
         total = sum(w.values())
         with_sent = _final_composite(0.5, 0.5, 0.5, 1.0, "crypto")
@@ -135,6 +136,32 @@ class TestFinalComposite:
         score_with = _final_composite(0.5, 0.5, 0.0, 0.5, "crypto")
         score_none = _final_composite(0.5, 0.5, None, 0.5, "crypto")
         assert score_with == pytest.approx(score_none)
+
+    def test_ignition_included_when_provided(self):
+        without = _final_composite(0.5, 0.5, 0.5, 0.5, "crypto")
+        with_ign = _final_composite(0.5, 0.5, 0.5, 0.5, "crypto", ign=1.0)
+        # ignition=1.0 while others=0.5 → with_ign should be higher
+        assert with_ign > without
+
+    def test_ignition_none_equals_no_ignition(self):
+        without = _final_composite(0.5, 0.5, 0.5, 0.5, "crypto")
+        with_none = _final_composite(0.5, 0.5, 0.5, 0.5, "crypto", ign=None)
+        assert without == pytest.approx(with_none)
+
+    def test_ignition_weight_from_config(self):
+        # With ignition=1.0, the delta vs no-ignition = IGNITION_WEIGHT / (total + IGNITION_WEIGHT)
+        w = config.CRYPTO_SIGNAL_WEIGHTS
+        base_total = sum(w.values())
+        ign_w = config.IGNITION_WEIGHT
+        # All non-ignition signals = 0; ignition = 1.0 → composite = ign_w / (base_total + ign_w)
+        score_all_zero = _final_composite(0.0, 0.0, 0.0, 0.0, "crypto", ign=1.0)
+        expected = ign_w / (base_total + ign_w)
+        assert score_all_zero == pytest.approx(expected)
+
+    def test_ignition_not_applied_to_stocks(self):
+        # ign param is not passed for stocks; should not affect score
+        score = _final_composite(0.5, 0.5, None, 0.5, "stocks")
+        assert -1.0 <= score <= 1.0
 
 
 # ---------------------------------------------------------------------------
@@ -176,11 +203,12 @@ class TestAggregateSignal:
     def test_blends_sentiment_for_crypto(self, temp_db, monkeypatch):
         monkeypatch.setattr(config, "SENTIMENT_ENABLED", True)
         now = int(time.time())
-        _insert_signal(temp_db, "BTC/USDT", "crypto", mom=0.0, vol=0.0, fund=0.0, composite=0.0)
+        # ign=None so ignition weight is not added to the pool
+        _insert_signal(temp_db, "BTC/USDT", "crypto", mom=0.0, vol=0.0, fund=0.0, ign=None, composite=0.0)
         _insert_sentiment(temp_db, "BTC/USDT", 1.0, now - 60)
         result = aggregate_signal("BTC/USDT", "crypto")
         assert result is not None
-        # Sentiment=1.0, everything else=0 → composite = sent_weight * 1.0 / total
+        # Sentiment=1.0, everything else=0, no ignition → composite = sent_weight / base_total
         w = config.CRYPTO_SIGNAL_WEIGHTS
         expected = w["sentiment"] / sum(w.values())
         assert result.composite_score == pytest.approx(expected)
@@ -249,6 +277,31 @@ class TestAggregateSignal:
         result = aggregate_signal("AAPL", "stocks")
         assert result is not None
         assert result.funding_score is None
+
+    def test_ignition_score_propagated(self, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "SENTIMENT_ENABLED", False)
+        _insert_signal(temp_db, "BTC/USDT", "crypto", ign=0.8)
+        result = aggregate_signal("BTC/USDT", "crypto")
+        assert result is not None
+        assert result.ignition_score == pytest.approx(0.8)
+
+    def test_ignition_none_for_stocks(self, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "SENTIMENT_ENABLED", False)
+        _insert_signal(temp_db, "AAPL", "stocks", fund=None, ign=None)
+        result = aggregate_signal("AAPL", "stocks")
+        assert result is not None
+        assert result.ignition_score is None
+
+    def test_ignition_increases_composite(self, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "SENTIMENT_ENABLED", False)
+        _insert_signal(temp_db, "BTC/USDT", "crypto", mom=0.5, vol=0.5, fund=0.5, ign=None)
+        result_no_ign = aggregate_signal("BTC/USDT", "crypto")
+        assert result_no_ign is not None
+
+        _insert_signal(temp_db, "ETH/USDT", "crypto", mom=0.5, vol=0.5, fund=0.5, ign=1.0)
+        result_with_ign = aggregate_signal("ETH/USDT", "crypto")
+        assert result_with_ign is not None
+        assert result_with_ign.composite_score > result_no_ign.composite_score
 
 
 # ---------------------------------------------------------------------------

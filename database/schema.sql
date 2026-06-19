@@ -38,6 +38,7 @@ CREATE TABLE IF NOT EXISTS signals (
     momentum_score      REAL    NOT NULL,  -- normalised [-1, 1]
     volatility_score    REAL    NOT NULL,  -- normalised [-1, 1]
     funding_score       REAL,              -- NULL for stocks
+    ignition_score      REAL,              -- NULL for stocks; volume z-score + ROC
     composite_score     REAL    NOT NULL,  -- weighted aggregate
     action              TEXT    NOT NULL CHECK (action IN ('buy', 'sell', 'hold')),
     inserted_at         INTEGER NOT NULL DEFAULT (unixepoch())

@@ -35,6 +35,7 @@ class AggregatedSignal:
     sentiment_score: float
     composite_score: float
     action: str  # 'buy' | 'sell' | 'hold'
+    ignition_score: float | None = None  # None for stocks; added after initial schema
 
 
 def _final_composite(
@@ -43,16 +44,27 @@ def _final_composite(
     fund: float | None,
     sent: float,
     asset_class: str,
+    *,
+    ign: float | None = None,
 ) -> float:
-    """Weighted composite across all four signals using class-specific config weights."""
+    """Weighted composite across all signals using class-specific config weights.
+
+    Ignition is included when *ign* is provided (crypto only), adding
+    config.IGNITION_WEIGHT to the pool before re-normalisation.
+    """
     if asset_class == "crypto":
-        weights = config.CRYPTO_SIGNAL_WEIGHTS
+        base_weights = config.CRYPTO_SIGNAL_WEIGHTS
         scores = {
             "momentum": mom,
             "volatility": vol,
             "funding": fund if fund is not None else 0.0,
             "sentiment": sent,
         }
+        if ign is not None:
+            weights = {**base_weights, "ignition": config.IGNITION_WEIGHT}
+            scores["ignition"] = ign
+        else:
+            weights = base_weights
     else:
         weights = config.STOCK_SIGNAL_WEIGHTS
         scores = {"momentum": mom, "volatility": vol, "sentiment": sent}
@@ -82,7 +94,7 @@ def aggregate_signal(symbol: str, asset_class: str = "crypto") -> AggregatedSign
     conn = get_connection()
     row = conn.execute(
         """
-        SELECT id, momentum_score, volatility_score, funding_score
+        SELECT id, momentum_score, volatility_score, funding_score, ignition_score
         FROM signals
         WHERE symbol = ? AND asset_class = ?
         ORDER BY ts DESC
@@ -99,9 +111,10 @@ def aggregate_signal(symbol: str, asset_class: str = "crypto") -> AggregatedSign
     mom = float(row["momentum_score"])
     vol = float(row["volatility_score"])
     fund = float(row["funding_score"]) if row["funding_score"] is not None else None
+    ign = float(row["ignition_score"]) if row["ignition_score"] is not None else None
     sent = sentiment_signal.compute(symbol)
 
-    composite = _final_composite(mom, vol, fund, sent, asset_class)
+    composite = _final_composite(mom, vol, fund, sent, asset_class, ign=ign)
     action = _action(composite)
 
     conn.execute(
@@ -111,9 +124,10 @@ def aggregate_signal(symbol: str, asset_class: str = "crypto") -> AggregatedSign
     conn.commit()
 
     _log.info(
-        "aggregated %s: sent=%.3f composite=%.3f action=%s",
+        "aggregated %s: sent=%.3f ign=%s composite=%.3f action=%s",
         symbol,
         sent,
+        f"{ign:.3f}" if ign is not None else "n/a",
         composite,
         action,
     )
@@ -128,6 +142,7 @@ def aggregate_signal(symbol: str, asset_class: str = "crypto") -> AggregatedSign
         sentiment_score=sent,
         composite_score=composite,
         action=action,
+        ignition_score=ign,
     )
 
 

@@ -60,6 +60,14 @@ class Database:
     def _apply_schema(self, conn: sqlite3.Connection) -> None:
         sql = _SCHEMA_PATH.read_text()
         conn.executescript(sql)
+        self._migrate(conn)
+
+    def _migrate(self, conn: sqlite3.Connection) -> None:
+        """Add columns introduced after the initial schema creation."""
+        existing = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
+        if "ignition_score" not in existing:
+            conn.execute("ALTER TABLE signals ADD COLUMN ignition_score REAL")
+            conn.commit()
 
 
 # Module-level singleton; components call get_connection() instead of
