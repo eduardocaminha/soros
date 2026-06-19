@@ -9,6 +9,20 @@ import pytest
 import config
 from data.assembler import AssembledUniverse, assemble_universe
 from data.gem_scanner import GemCandidate
+from data.binance_symbols import reset_cache as reset_binance_cache
+
+
+# ---------------------------------------------------------------------------
+# Fixtures
+# ---------------------------------------------------------------------------
+
+@pytest.fixture(autouse=True)
+def _no_network_binance():
+    """Disable the Binance symbol filter for all tests by default (returns None)."""
+    reset_binance_cache()
+    with patch("data.assembler.get_tradeable_symbols", return_value=None):
+        yield
+    reset_binance_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -25,6 +39,10 @@ def _mock_dex(trending: frozenset[str]):
 
 def _mock_gems(candidates: list[GemCandidate]):
     return patch("data.assembler.scan_gems", return_value=candidates)
+
+
+def _mock_tradeable(symbols: frozenset[str] | None):
+    return patch("data.assembler.get_tradeable_symbols", return_value=symbols)
 
 
 def _gem(symbol: str, score: float = 5.0, dex_boost: bool = False) -> GemCandidate:
@@ -154,3 +172,41 @@ class TestGracefulDegradation:
             # assembler does not swallow it — the dex_scanner itself caches on failure
             with pytest.raises(OSError):
                 assemble_universe()
+
+
+# ---------------------------------------------------------------------------
+# Binance symbol filtering
+# ---------------------------------------------------------------------------
+
+class TestBinanceSymbolFiltering:
+    """Assembler must drop base/gem symbols absent from Binance spot."""
+
+    def test_base_coin_not_on_binance_dropped(self):
+        tradeable = frozenset({"BTC/USDT", "ETH/USDT"})
+        with _mock_base(["BTC/USDT", "LEO/USDT", "ETH/USDT"]), \
+             _mock_dex(frozenset()), \
+             _mock_gems([]), \
+             _mock_tradeable(tradeable):
+            uni = assemble_universe()
+        assert "LEO/USDT" not in uni.all_symbols
+        assert uni.base_symbols == ["BTC/USDT", "ETH/USDT"]
+
+    def test_gem_not_on_binance_dropped(self):
+        tradeable = frozenset({"BTC/USDT", "ETH/USDT"})
+        with _mock_base(["BTC/USDT"]), \
+             _mock_dex(frozenset()), \
+             _mock_gems([_gem("ETH/USDT"), _gem("OFFCHAIN/USDT")]), \
+             _mock_tradeable(tradeable):
+            uni = assemble_universe()
+        assert "OFFCHAIN/USDT" not in uni.all_symbols
+        assert "ETH/USDT" in uni.all_symbols
+
+    def test_filter_unavailable_passes_everything(self):
+        # When tradeable is None (markets never loaded), nothing is dropped.
+        with _mock_base(["BTC/USDT", "LEO/USDT"]), \
+             _mock_dex(frozenset()), \
+             _mock_gems([_gem("RAIN/USDT")]), \
+             _mock_tradeable(None):
+            uni = assemble_universe()
+        assert "LEO/USDT" in uni.all_symbols
+        assert "RAIN/USDT" in uni.all_symbols

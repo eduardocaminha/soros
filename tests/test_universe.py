@@ -9,13 +9,16 @@ import pytest
 import config
 import data.universe as universe_module
 from data.universe import _EXCLUDE, get_base_universe, reset_cache
+from data.binance_symbols import reset_cache as reset_binance_cache
 
 
 @pytest.fixture(autouse=True)
 def _clear_cache():
     reset_cache()
+    reset_binance_cache()
     yield
     reset_cache()
+    reset_binance_cache()
 
 
 # ---------------------------------------------------------------------------
@@ -130,3 +133,36 @@ class TestExcludeSet:
     @pytest.mark.parametrize("ticker", ["USDT", "USDC", "DAI", "BUSD", "WBTC", "WETH", "STETH"])
     def test_known_exclusions_present(self, ticker: str):
         assert ticker in _EXCLUDE
+
+
+class TestBinanceFilter:
+    """Coins from CoinGecko without a Binance spot pair must be filtered out."""
+
+    def _patch_tradeable(self, symbols: frozenset[str]):
+        return patch("data.universe.get_tradeable_symbols", return_value=symbols)
+
+    def test_coin_not_on_binance_is_filtered(self):
+        # LEO and WBT are known CoinGecko top-N coins absent on Binance spot.
+        tradeable = frozenset({"BTC/USDT", "ETH/USDT", "SOL/USDT"})
+        payload = _make_api_response(["BTC", "LEO", "ETH", "WBT", "SOL"])
+        with _patch_urlopen(payload), self._patch_tradeable(tradeable):
+            result = get_base_universe(n=3)
+        assert "LEO/USDT" not in result
+        assert "WBT/USDT" not in result
+        assert result == ["BTC/USDT", "ETH/USDT", "SOL/USDT"]
+
+    def test_larger_coingecko_page_fills_n_after_filter(self):
+        # Only 2 of the 5 returned coins are tradeable; we still fill n=2.
+        tradeable = frozenset({"BTC/USDT", "SOL/USDT"})
+        payload = _make_api_response(["BTC", "LEO", "WBT", "USD1", "SOL"])
+        with _patch_urlopen(payload), self._patch_tradeable(tradeable):
+            result = get_base_universe(n=2)
+        assert result == ["BTC/USDT", "SOL/USDT"]
+
+    def test_filter_unavailable_passes_all_through(self):
+        # When get_tradeable_symbols returns None (markets never loaded),
+        # no symbols are dropped — original behaviour is preserved.
+        payload = _make_api_response(["BTC", "LEO", "ETH"])
+        with _patch_urlopen(payload), self._patch_tradeable(None):
+            result = get_base_universe(n=3)
+        assert result == ["BTC/USDT", "LEO/USDT", "ETH/USDT"]

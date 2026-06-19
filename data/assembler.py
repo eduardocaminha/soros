@@ -24,6 +24,7 @@ from __future__ import annotations
 from dataclasses import dataclass, field
 from typing import Any
 
+from data.binance_symbols import get_tradeable_symbols
 from data.dex_scanner import get_dex_trending_symbols
 from data.gem_scanner import GemCandidate, scan_gems
 from data.universe import get_base_universe
@@ -68,7 +69,20 @@ def assemble_universe(
         GemCandidate list (used for risk sizing in the risk manager).
     """
     # 1. Market-cap base tier (cached; degrades gracefully on API failure)
+    #    universe.py already filters against Binance spot; re-applying here is
+    #    belt-and-suspenders and ensures assembler is consistent even if the
+    #    cache state diverges between the two modules.
+    tradeable = get_tradeable_symbols()  # frozenset | None (None = filter unavailable)
     base = get_base_universe(n=n, refresh_secs=refresh_secs)
+    if tradeable is not None:
+        filtered_out = [s for s in base if s not in tradeable]
+        if filtered_out:
+            _log.warning(
+                "base: dropping %d symbols not on Binance spot: %s",
+                len(filtered_out),
+                filtered_out,
+            )
+        base = [s for s in base if s in tradeable]
     base_set = set(base)
 
     # 2. DEX trending symbols — used only as a score boost, not for execution
@@ -80,6 +94,9 @@ def assemble_universe(
         base_symbols=base_set,
         dex_trending_symbols=dex_trending,
     )
+    # Filter gem candidates against Binance spot to be safe
+    if tradeable is not None:
+        gem_candidates = [c for c in gem_candidates if c.symbol in tradeable]
     gem_symbols = [c.symbol for c in gem_candidates]
     dex_boosted: frozenset[str] = frozenset(c.symbol for c in gem_candidates if c.dex_boost)
 
