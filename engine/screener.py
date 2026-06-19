@@ -260,6 +260,38 @@ def screen(
     )
 
 
+def save_screener_result(result: ScreenerResult) -> None:
+    """Persist screener entries to screener_runs for dashboard display."""
+    if not result.entries:
+        return
+    conn = get_connection()
+    run_ts = int(time.time())
+    conn.executemany(
+        """
+        INSERT INTO screener_runs
+            (run_ts, symbol, asset_class, is_pinned, volume_usd_24h,
+             composite_score, sentiment_score, conviction, selected, reason)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+        """,
+        [
+            (
+                run_ts,
+                e.symbol,
+                e.asset_class,
+                1 if e.is_pinned else 0,
+                e.volume_usd_24h,
+                e.composite_score,
+                e.sentiment_score,
+                e.conviction,
+                1 if e.selected else 0,
+                e.reason,
+            )
+            for e in result.entries
+        ],
+    )
+    conn.commit()
+
+
 if __name__ == "__main__":
     result = screen()
     print(f"crypto: {result.selected_crypto}")

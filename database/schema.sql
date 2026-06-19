@@ -148,3 +148,25 @@ CREATE INDEX IF NOT EXISTS ix_event_log_ts
     ON event_log (ts DESC);
 CREATE INDEX IF NOT EXISTS ix_event_log_level
     ON event_log (level);
+
+-- ─────────────────────────────────────────────
+-- Screener snapshots — one row per symbol per run
+-- run_ts groups all entries from a single screen() call
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS screener_runs (
+    id              INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_ts          INTEGER NOT NULL,
+    symbol          TEXT    NOT NULL,
+    asset_class     TEXT    NOT NULL CHECK (asset_class IN ('crypto', 'stocks')),
+    is_pinned       INTEGER NOT NULL CHECK (is_pinned IN (0, 1)),
+    volume_usd_24h  REAL    NOT NULL DEFAULT 0.0,
+    composite_score REAL    NOT NULL DEFAULT 0.0,
+    sentiment_score REAL    NOT NULL DEFAULT 0.0,
+    conviction      REAL    NOT NULL DEFAULT 0.0,
+    selected        INTEGER NOT NULL CHECK (selected IN (0, 1)),
+    reason          TEXT    NOT NULL,
+    inserted_at     INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS ix_screener_run_ts
+    ON screener_runs (run_ts DESC);

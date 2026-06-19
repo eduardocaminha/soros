@@ -16,6 +16,7 @@ from engine.screener import (
     _latest_composite,
     _latest_sentiment,
     _volume_usd_24h,
+    save_screener_result,
     screen,
 )
 
@@ -463,3 +464,104 @@ class TestScreenEnabled:
             stock_watchlist=[],
         )
         assert result.selected_crypto == ["BTC/USDT"]
+
+
+# ---------------------------------------------------------------------------
+# save_screener_result
+# ---------------------------------------------------------------------------
+
+class TestSaveScreenerResult:
+    def _make_entry(
+        self,
+        symbol: str = "BTC/USDT",
+        asset_class: str = "crypto",
+        is_pinned: bool = True,
+        selected: bool = True,
+        reason: str = "pinned",
+        composite: float = 0.7,
+        sentiment: float = 0.5,
+        volume: float = 1_000_000.0,
+    ) -> ScreenerEntry:
+        return ScreenerEntry(
+            symbol=symbol,
+            asset_class=asset_class,
+            is_pinned=is_pinned,
+            volume_usd_24h=volume,
+            composite_score=composite,
+            sentiment_score=sentiment,
+            conviction=abs(composite),
+            selected=selected,
+            reason=reason,
+        )
+
+    def test_persists_entries_to_db(self, temp_db):
+        result = ScreenerResult(
+            selected_crypto=["BTC/USDT"],
+            selected_stocks=[],
+            entries=[
+                self._make_entry("BTC/USDT", selected=True, reason="pinned"),
+                self._make_entry("DOGE/USDT", is_pinned=False, selected=False, reason="volume_floor"),
+            ],
+        )
+        save_screener_result(result)
+        conn = sqlite3.connect(temp_db)
+        rows = conn.execute("SELECT * FROM screener_runs ORDER BY symbol").fetchall()
+        conn.close()
+        assert len(rows) == 2
+
+    def test_all_entries_share_same_run_ts(self, temp_db):
+        result = ScreenerResult(
+            selected_crypto=["BTC/USDT"],
+            selected_stocks=[],
+            entries=[
+                self._make_entry("BTC/USDT"),
+                self._make_entry("ETH/USDT"),
+            ],
+        )
+        save_screener_result(result)
+        conn = sqlite3.connect(temp_db)
+        tss = [r[0] for r in conn.execute("SELECT DISTINCT run_ts FROM screener_runs").fetchall()]
+        conn.close()
+        assert len(tss) == 1
+
+    def test_is_pinned_and_selected_stored_as_integers(self, temp_db):
+        result = ScreenerResult(
+            selected_crypto=["BTC/USDT"],
+            selected_stocks=[],
+            entries=[self._make_entry("BTC/USDT", is_pinned=True, selected=True)],
+        )
+        save_screener_result(result)
+        conn = sqlite3.connect(temp_db)
+        row = conn.execute("SELECT is_pinned, selected FROM screener_runs").fetchone()
+        conn.close()
+        assert row[0] == 1
+        assert row[1] == 1
+
+    def test_noop_on_empty_entries(self, temp_db):
+        result = ScreenerResult(selected_crypto=[], selected_stocks=[], entries=[])
+        save_screener_result(result)
+        conn = sqlite3.connect(temp_db)
+        count = conn.execute("SELECT COUNT(*) FROM screener_runs").fetchone()[0]
+        conn.close()
+        assert count == 0
+
+    def test_reason_and_scores_stored_correctly(self, temp_db):
+        entry = self._make_entry(
+            "ETH/USDT", is_pinned=False, selected=False, reason="sentiment_gate",
+            composite=-0.6, sentiment=-0.5, volume=2_000_000.0,
+        )
+        save_screener_result(ScreenerResult(
+            selected_crypto=[], selected_stocks=[], entries=[entry],
+        ))
+        conn = sqlite3.connect(temp_db)
+        row = conn.execute(
+            "SELECT symbol, reason, composite_score, sentiment_score, volume_usd_24h, conviction "
+            "FROM screener_runs"
+        ).fetchone()
+        conn.close()
+        assert row[0] == "ETH/USDT"
+        assert row[1] == "sentiment_gate"
+        assert abs(row[2] - (-0.6)) < 1e-6
+        assert abs(row[3] - (-0.5)) < 1e-6
+        assert abs(row[4] - 2_000_000.0) < 1e-3
+        assert abs(row[5] - 0.6) < 1e-6
