@@ -1,6 +1,7 @@
 # soros
 
-Bot de trading algoritmico pessoal e automatizado (cripto na Binance, acoes na Alpaca).
+Bot de trading algoritmico pessoal e automatizado, focado em cripto (Binance). O suporte
+a acoes (Alpaca/yfinance) existe mas vem desligado por default (cripto-only).
 Duas camadas: sinais deterministicos (modelos validados academicamente) e analise de
 sentimento por LLM (Claude). Storage local em SQLite. Paper trading obrigatorio antes
 de qualquer capital real; execucao real toggleavel por classe (default desligada).
@@ -46,7 +47,7 @@ cp .env.example .env
 | Variavel | Default | Descricao |
 |---|---|---|
 | `CRYPTO_SYMBOLS` | `BTC/USDT,ETH/USDT,SOL/USDT` | Simbolos cripto pinned — sempre operados. |
-| `STOCK_SYMBOLS` | `AAPL,MSFT,NVDA` | Simbolos de acoes pinned — sempre operados. |
+| `STOCK_SYMBOLS` | _(vazio)_ | Simbolos de acoes pinned. Vazio = cripto-only; preencha para operar acoes. |
 | `CRYPTO_WATCHLIST` | _(vazio)_ | Candidatos cripto adicionais avaliados pelo screener. |
 | `STOCK_WATCHLIST` | _(vazio)_ | Candidatos de acoes adicionais avaliados pelo screener. |
 

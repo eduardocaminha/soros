@@ -62,9 +62,11 @@ CRYPTO_SYMBOLS: list[str] = [
     if symbol.strip()
 ]
 
+# Vazio por default: o bot e cripto-only. Para operar acoes (B3 via yfinance
+# .SA, ou US via Alpaca), preencha STOCK_SYMBOLS no ambiente.
 STOCK_SYMBOLS: list[str] = [
     symbol.strip()
-    for symbol in os.environ.get("STOCK_SYMBOLS", "AAPL,MSFT,NVDA").split(",")
+    for symbol in os.environ.get("STOCK_SYMBOLS", "").split(",")
     if symbol.strip()
 ]
 
