@@ -8,7 +8,9 @@ live order reaches an exchange until explicitly enabled.
 from __future__ import annotations
 
 import os
+import sys
 from pathlib import Path
+from typing import Any
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -290,6 +292,34 @@ SETTINGS_LOCKED: frozenset[str] = frozenset({
     "MAX_OPEN_POSITIONS",
 })
 
+# Hardcoded defaults for every allowlisted key.  Used by reload_runtime_overrides()
+# so the settings-table fallback is stable even after a previous override is deleted.
+_TUNABLE_DEFAULTS: dict[str, Any] = {
+    "LOOP_INTERVAL_SECONDS":       3600,
+    "SIGNAL_THRESHOLD":            0.25,
+    "DEBATE_DIVERGENCE_THRESHOLD": 0.10,
+    "SCREENER_ENABLED":            False,
+    "SCREENER_TOP_N":              3,
+    "SCREENER_MIN_VOLUME_USD":     1_000_000.0,
+    "MARKETCAP_TOP_N":             20,
+    "MARKETCAP_REFRESH_SECS":      3600,
+    "DEX_BOOST_MULTIPLIER":        1.5,
+    "DEX_SCAN_CACHE_SECS":         300,
+    "GEM_VOLUME_SURGE_MULTIPLIER": 2.0,
+    "GEM_ROC_MIN_PCT":             3.0,
+    "GEM_TOP_N":                   5,
+    "GEM_MIN_VOLUME_USD":          500_000.0,
+    "IGNITION_WEIGHT":             0.15,
+    "GEM_POSITION_SIZE_PCT":       0.05,
+    "GEM_TRAILING_STOP_PCT":       0.05,
+    "POSITION_SIZE_PCT":           0.10,
+    "WATCHLIST_OHLCV_LIMIT":       50,
+    "SENTIMENT_MAX_AGE_SECONDS":   7200,
+    "INITIAL_CAPITAL":             10_000.0,
+    "FEE_PCT":                     0.001,
+    "SLIPPAGE_PCT":                0.0005,
+}
+
 # ---------------------------------------------------------------------------
 # Logging
 # ---------------------------------------------------------------------------
@@ -334,3 +364,19 @@ def validate_config() -> None:
 
     if errors:
         raise ValueError("Config validation failed:\n" + "\n".join(f"  - {e}" for e in errors))
+
+
+def reload_runtime_overrides() -> None:
+    """Re-apply env > settings > default for every key in SETTINGS_ALLOWLIST.
+
+    Call once at the start of each bot cycle.  Never touches locked keys
+    (CRYPTO_LIVE, STOCKS_LIVE, SENTIMENT_ENABLED, MAX_DRAWDOWN_PCT,
+    MAX_OPEN_POSITIONS) — those remain fixed at their startup values.
+    """
+    from database import settings_store  # late import avoids circular dependency at startup
+
+    _mod = sys.modules[__name__]
+    for key, default in _TUNABLE_DEFAULTS.items():
+        env_raw: str | None = os.environ.get(key)
+        new_val = settings_store.resolve(key, env_raw, default)
+        setattr(_mod, key, new_val)
