@@ -5,7 +5,7 @@ from __future__ import annotations
 import sqlite3
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import MagicMock, patch
+from unittest.mock import MagicMock, call, patch
 
 import pytest
 
@@ -46,6 +46,15 @@ def _make_aggregated(symbol="BTC/USDT", asset_class="crypto", action="hold"):
         sentiment_score=0.0,
         composite_score=0.1,
         action=action,
+    )
+
+
+def _make_screener_result(crypto=None, stocks=None):
+    from engine.screener import ScreenerResult
+    return ScreenerResult(
+        selected_crypto=crypto or ["BTC/USDT"],
+        selected_stocks=stocks or ["AAPL"],
+        entries=[],
     )
 
 
@@ -159,6 +168,30 @@ class TestMarkToMarket:
         assert row["unrealized_pnl"] == pytest.approx(0.0)
 
 
+_CYCLE_BASE_PATCHES = [
+    ("main.crypto_collector.collect_once", {}),
+    ("main.stocks_collector.collect_once", {}),
+    ("main.signals_compute.compute_once", []),
+    ("main.signal_aggregator.aggregate_once", []),
+    ("main.order_executor.execute_once", []),
+    ("main.stocks_executor.execute_stocks_once", []),
+]
+
+
+def _cycle_ctx(extra=None):
+    """Context-manager stack: base patches + optional extras."""
+    from contextlib import ExitStack
+    stack = ExitStack()
+    for target, retval in _CYCLE_BASE_PATCHES:
+        stack.enter_context(patch(target, return_value=retval))
+    stack.enter_context(
+        patch("main.screen", return_value=_make_screener_result())
+    )
+    for ctx in (extra or []):
+        stack.enter_context(ctx)
+    return stack
+
+
 class TestRunCycle:
     def test_cycle_runs_without_errors(self):
         """Full cycle with all external calls mocked — should complete cleanly."""
@@ -166,15 +199,7 @@ class TestRunCycle:
         from main import _run_cycle
 
         rm = RiskManager()
-
-        with (
-            patch("main.crypto_collector.collect_once", return_value={}),
-            patch("main.stocks_collector.collect_once", return_value={}),
-            patch("main.signals_compute.compute_once", return_value=[]),
-            patch("main.signal_aggregator.aggregate_once", return_value=[]),
-            patch("main.order_executor.execute_once", return_value=[]),
-            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
-        ):
+        with _cycle_ctx():
             _run_cycle(rm)  # must not raise
 
     def test_cycle_skips_sentiment_when_disabled(self):
@@ -182,17 +207,11 @@ class TestRunCycle:
         from main import _run_cycle
 
         rm = RiskManager()
-
-        with (
-            patch("main.crypto_collector.collect_once", return_value={}),
-            patch("main.stocks_collector.collect_once", return_value={}),
-            patch("main.signals_compute.compute_once", return_value=[]),
-            patch("main.signal_aggregator.aggregate_once", return_value=[]),
-            patch("main.order_executor.execute_once", return_value=[]),
-            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
+        mock_sentiment = MagicMock()
+        with _cycle_ctx([
             patch("main.config.SENTIMENT_ENABLED", False),
-            patch("main.sentiment_runner.run") as mock_sentiment,
-        ):
+            patch("main.sentiment_runner.run", mock_sentiment),
+        ]):
             _run_cycle(rm)
             mock_sentiment.assert_not_called()
 
@@ -201,17 +220,11 @@ class TestRunCycle:
         from main import _run_cycle
 
         rm = RiskManager()
-
-        with (
-            patch("main.crypto_collector.collect_once", return_value={}),
-            patch("main.stocks_collector.collect_once", return_value={}),
-            patch("main.signals_compute.compute_once", return_value=[]),
-            patch("main.signal_aggregator.aggregate_once", return_value=[]),
-            patch("main.order_executor.execute_once", return_value=[]),
-            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
+        mock_sentiment = MagicMock(return_value=[])
+        with _cycle_ctx([
             patch("main.config.SENTIMENT_ENABLED", True),
-            patch("main.sentiment_runner.run", return_value=[]) as mock_sentiment,
-        ):
+            patch("main.sentiment_runner.run", mock_sentiment),
+        ]):
             _run_cycle(rm)
             mock_sentiment.assert_called_once()
 
@@ -221,17 +234,10 @@ class TestRunCycle:
         from main import _run_cycle
 
         rm = RiskManager()
-
-        with (
-            patch("main.crypto_collector.collect_once", return_value={}),
-            patch("main.stocks_collector.collect_once", return_value={}),
-            patch("main.signals_compute.compute_once", return_value=[]),
-            patch("main.signal_aggregator.aggregate_once", return_value=[]),
-            patch("main.order_executor.execute_once", return_value=[]),
-            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
+        with _cycle_ctx([
             patch("main.config.SENTIMENT_ENABLED", True),
             patch("main.sentiment_runner.run", side_effect=RuntimeError("rate limit")),
-        ):
+        ]):
             _run_cycle(rm)  # must not raise
 
     def test_cycle_passes_det_scores_to_sentiment(self):
@@ -251,20 +257,110 @@ class TestRunCycle:
             composite_score=0.4,
             action="buy",
         )
-
-        with (
-            patch("main.crypto_collector.collect_once", return_value={}),
-            patch("main.stocks_collector.collect_once", return_value={}),
+        mock_sentiment = MagicMock(return_value=[])
+        with _cycle_ctx([
             patch("main.signals_compute.compute_once", return_value=[fake_signal]),
-            patch("main.signal_aggregator.aggregate_once", return_value=[]),
-            patch("main.order_executor.execute_once", return_value=[]),
-            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
             patch("main.config.SENTIMENT_ENABLED", True),
-            patch("main.sentiment_runner.run", return_value=[]) as mock_sentiment,
-        ):
+            patch("main.sentiment_runner.run", mock_sentiment),
+        ]):
             _run_cycle(rm)
             _, kwargs = mock_sentiment.call_args
             assert kwargs["deterministic_scores"] == {"BTC/USDT": pytest.approx(0.4)}
+
+    def test_cycle_calls_screener_each_cycle(self):
+        """screen() must be called once per cycle."""
+        from engine.risk_manager import RiskManager
+        from main import _run_cycle
+
+        rm = RiskManager()
+        mock_screen = MagicMock(return_value=_make_screener_result())
+        with (
+            patch("main.crypto_collector.collect_once", return_value={}),
+            patch("main.stocks_collector.collect_once", return_value={}),
+            patch("main.signals_compute.compute_once", return_value=[]),
+            patch("main.signal_aggregator.aggregate_once", return_value=[]),
+            patch("main.order_executor.execute_once", return_value=[]),
+            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
+            patch("main.screen", mock_screen),
+        ):
+            _run_cycle(rm)
+            mock_screen.assert_called_once()
+
+    def test_cycle_forwards_selected_symbols_to_compute(self):
+        """compute_once must receive the screener-selected symbols."""
+        from engine.risk_manager import RiskManager
+        from main import _run_cycle
+
+        rm = RiskManager()
+        screener_result = _make_screener_result(
+            crypto=["ETH/USDT"], stocks=["MSFT"]
+        )
+        mock_compute = MagicMock(return_value=[])
+        with (
+            patch("main.crypto_collector.collect_once", return_value={}),
+            patch("main.stocks_collector.collect_once", return_value={}),
+            patch("main.signals_compute.compute_once", mock_compute),
+            patch("main.signal_aggregator.aggregate_once", return_value=[]),
+            patch("main.order_executor.execute_once", return_value=[]),
+            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
+            patch("main.screen", return_value=screener_result),
+        ):
+            _run_cycle(rm)
+            mock_compute.assert_called_once_with(
+                crypto_symbols=["ETH/USDT"],
+                stock_symbols=["MSFT"],
+            )
+
+    def test_cycle_forwards_selected_symbols_to_aggregate(self):
+        """aggregate_once must receive the screener-selected symbols."""
+        from engine.risk_manager import RiskManager
+        from main import _run_cycle
+
+        rm = RiskManager()
+        screener_result = _make_screener_result(
+            crypto=["BTC/USDT", "SOL/USDT"], stocks=["AAPL", "NVDA"]
+        )
+        mock_aggregate = MagicMock(return_value=[])
+        with (
+            patch("main.crypto_collector.collect_once", return_value={}),
+            patch("main.stocks_collector.collect_once", return_value={}),
+            patch("main.signals_compute.compute_once", return_value=[]),
+            patch("main.signal_aggregator.aggregate_once", mock_aggregate),
+            patch("main.order_executor.execute_once", return_value=[]),
+            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
+            patch("main.screen", return_value=screener_result),
+        ):
+            _run_cycle(rm)
+            mock_aggregate.assert_called_once_with(
+                crypto_symbols=["BTC/USDT", "SOL/USDT"],
+                stock_symbols=["AAPL", "NVDA"],
+            )
+
+    def test_cycle_forwards_selected_symbols_to_sentiment(self):
+        """sentiment_runner.run must receive the screener-selected symbols."""
+        from engine.risk_manager import RiskManager
+        from main import _run_cycle
+
+        rm = RiskManager()
+        screener_result = _make_screener_result(
+            crypto=["BTC/USDT"], stocks=["AAPL"]
+        )
+        mock_sentiment = MagicMock(return_value=[])
+        with (
+            patch("main.crypto_collector.collect_once", return_value={}),
+            patch("main.stocks_collector.collect_once", return_value={}),
+            patch("main.signals_compute.compute_once", return_value=[]),
+            patch("main.signal_aggregator.aggregate_once", return_value=[]),
+            patch("main.order_executor.execute_once", return_value=[]),
+            patch("main.stocks_executor.execute_stocks_once", return_value=[]),
+            patch("main.screen", return_value=screener_result),
+            patch("main.config.SENTIMENT_ENABLED", True),
+            patch("main.sentiment_runner.run", mock_sentiment),
+        ):
+            _run_cycle(rm)
+            _, kwargs = mock_sentiment.call_args
+            assert kwargs["crypto_symbols"] == ["BTC/USDT"]
+            assert kwargs["stock_symbols"] == ["AAPL"]
 
 
 class TestMain:
