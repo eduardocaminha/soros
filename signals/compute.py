@@ -1,6 +1,6 @@
-"""Deterministic signal computation: momentum + volatility_breakout + funding_rate.
+"""Deterministic signal computation: momentum + volatility_breakout + funding_rate + ignition.
 
-Reads OHLCV rows from the prices table, computes the three deterministic
+Reads OHLCV rows from the prices table, computes the four deterministic
 signal scores, derives a preliminary composite score (deterministic weights
 only, no sentiment), and upserts into the signals table.
 
@@ -22,7 +22,7 @@ import pandas as pd
 
 import config
 from database.db import get_connection, get_logger
-from signals import funding, momentum, volatility
+from signals import funding, ignition, momentum, volatility
 
 _log = get_logger(__name__)
 
@@ -37,6 +37,7 @@ class SignalResult:
     funding_score: float | None
     composite_score: float
     action: str  # 'buy' | 'sell' | 'hold'
+    ignition_score: float | None = None  # None for stocks; added after initial schema
 
 
 def _load_prices(symbol: str, asset_class: str, limit: int = 200) -> pd.DataFrame:
@@ -67,11 +68,14 @@ def _deterministic_composite(
     vol: float,
     fund: float | None,
     asset_class: str,
+    *,
+    ign: float | None = None,
 ) -> float:
     """Weighted composite from deterministic signals only (no sentiment).
 
     Uses config weights but re-normalises them to exclude sentiment, so the
     output is in [-1, 1] regardless of whether sentiment is present.
+    Ignition is included when *ign* is provided (crypto only).
     """
     if asset_class == "crypto":
         raw_weights = {
@@ -84,6 +88,9 @@ def _deterministic_composite(
             "volatility": vol,
             "funding": fund if fund is not None else 0.0,
         }
+        if ign is not None:
+            raw_weights["ignition"] = config.IGNITION_WEIGHT
+            scores["ignition"] = ign
     else:
         raw_weights = {
             "momentum": config.STOCK_SIGNAL_WEIGHTS["momentum"],
@@ -113,8 +120,8 @@ def _upsert_signal(result: SignalResult) -> None:
         """
         INSERT INTO signals
             (symbol, asset_class, ts, momentum_score, volatility_score,
-             funding_score, composite_score, action)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+             funding_score, ignition_score, composite_score, action)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         ON CONFLICT DO NOTHING
         """,
         (
@@ -124,6 +131,7 @@ def _upsert_signal(result: SignalResult) -> None:
             result.momentum_score,
             result.volatility_score,
             result.funding_score,
+            result.ignition_score,
             result.composite_score,
             result.action,
         ),
@@ -148,8 +156,11 @@ def compute_signal(symbol: str, asset_class: str = "crypto") -> SignalResult | N
     mom = momentum.compute(closes)
     vol = volatility.compute(df)
     fund = funding.compute(latest_funding)
+    ign = ignition.compute(df) if asset_class == "crypto" else None
 
-    composite = _deterministic_composite(mom, vol, fund if asset_class == "crypto" else None, asset_class)
+    composite = _deterministic_composite(
+        mom, vol, fund if asset_class == "crypto" else None, asset_class, ign=ign
+    )
     action = _action(composite)
     ts = int(time.time())
 
@@ -162,14 +173,16 @@ def compute_signal(symbol: str, asset_class: str = "crypto") -> SignalResult | N
         funding_score=fund if asset_class == "crypto" else None,
         composite_score=composite,
         action=action,
+        ignition_score=ign,
     )
     _upsert_signal(result)
     _log.info(
-        "signal %s: mom=%.3f vol=%.3f fund=%s composite=%.3f action=%s",
+        "signal %s: mom=%.3f vol=%.3f fund=%s ign=%s composite=%.3f action=%s",
         symbol,
         mom,
         vol,
         f"{fund:.3f}" if fund is not None else "n/a",
+        f"{ign:.3f}" if ign is not None else "n/a",
         composite,
         action,
     )
@@ -206,9 +219,11 @@ def compute_once(
 
 if __name__ == "__main__":
     for r in compute_once():
+        ign_str = f"{r.ignition_score:+.3f}" if r.ignition_score is not None else "n/a"
         print(
             f"{r.symbol:12s}  mom={r.momentum_score:+.3f}  "
             f"vol={r.volatility_score:+.3f}  "
             f"fund={r.funding_score:+.3f}  "
+            f"ign={ign_str}  "
             f"composite={r.composite_score:+.3f}  {r.action}"
         )

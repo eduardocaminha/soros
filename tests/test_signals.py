@@ -1,4 +1,4 @@
-"""Tests for deterministic signal modules: momentum, volatility, funding, compute."""
+"""Tests for deterministic signal modules: momentum, volatility, funding, ignition, compute."""
 
 from __future__ import annotations
 
@@ -11,7 +11,7 @@ from unittest.mock import patch
 import pandas as pd
 import pytest
 
-from signals import funding, momentum, volatility
+from signals import funding, ignition, momentum, volatility
 from signals.compute import SignalResult, _action, _deterministic_composite, compute_signal
 
 
@@ -136,6 +136,68 @@ class TestFunding:
 
 
 # ---------------------------------------------------------------------------
+# ignition
+# ---------------------------------------------------------------------------
+
+def _ign_df(closes: list[float], volumes: list[float]) -> pd.DataFrame:
+    return pd.DataFrame({"close": pd.Series(closes, dtype=float), "volume": pd.Series(volumes, dtype=float)})
+
+
+class TestIgnition:
+    def test_returns_zero_when_not_enough_data(self):
+        # needs _VOL_WINDOW + 1 = 21 rows minimum
+        df = _ign_df([100.0] * 20, [1000.0] * 20)
+        assert ignition.compute(df) == 0.0
+
+    def test_flat_prices_flat_volume_near_zero(self):
+        # constant volume (std=0) → vol_sig=0; flat close → roc=0 → roc_sig=0
+        df = _ign_df([100.0] * 30, [1000.0] * 30)
+        assert ignition.compute(df) == 0.0
+
+    def test_volume_surge_positive_price_positive(self):
+        # Reference window has varying volume (std > 0); last bar is a 5x spike
+        # with rising price → both components positive → clear positive ignition
+        ref_vols = [800.0 + (i % 5) * 100 for i in range(29)]  # 800-1200, std ≈ 158
+        closes = [100.0 + i * 0.5 for i in range(30)]
+        volumes = ref_vols + [5000.0]  # 5x spike well above mean
+        df = _ign_df(closes, volumes)
+        assert ignition.compute(df) > 0.1
+
+    def test_volume_crash_negative(self):
+        # Reference window has varying volume (std > 0); last bar is a tiny crash
+        ref_vols = [800.0 + (i % 5) * 100 for i in range(29)]  # 800-1200
+        closes = [100.0] * 30  # flat price → roc_sig = 0
+        volumes = ref_vols + [10.0]  # deep below mean → z very negative
+        df = _ign_df(closes, volumes)
+        assert ignition.compute(df) < 0.0
+
+    def test_price_roc_drives_signal_when_volume_flat(self):
+        # price jumps significantly, volume flat (std=0) → only roc contributes
+        closes = [100.0] * 29 + [115.0]  # +15 % jump
+        volumes = [1000.0] * 30  # flat volume → std=0 → vol_sig=0
+        df = _ign_df(closes, volumes)
+        score = ignition.compute(df)
+        # roc = 0.15/5bars_ref which is _ROC_WINDOW=5; ref is closes[-6]=100.0
+        # roc_sig = tanh(0.15/0.05) = tanh(3) ≈ 0.995; total = 0.995/2 ≈ 0.497
+        assert score > 0.4
+
+    def test_output_bounded(self):
+        closes = [1.0 * (2 ** i) for i in range(30)]
+        volumes = [1000.0 * (2 ** i) for i in range(30)]
+        df = _ign_df(closes, volumes)
+        score = ignition.compute(df)
+        assert -1.0 <= score <= 1.0
+
+    def test_symmetry_volume_component(self):
+        # Reference window has variance; spike should score higher than crash
+        ref_vols = [800.0 + (i % 5) * 100 for i in range(29)]  # varying volume
+        closes = [100.0] * 30  # flat price (roc = 0) so only volume drives the signal
+        spike_df = _ign_df(closes, ref_vols + [5000.0])
+        crash_df = _ign_df(closes, ref_vols + [10.0])
+        assert ignition.compute(spike_df) > ignition.compute(crash_df)
+
+
+# ---------------------------------------------------------------------------
 # _action
 # ---------------------------------------------------------------------------
 
@@ -173,6 +235,21 @@ class TestDeterministicComposite:
     def test_output_bounded(self):
         score = _deterministic_composite(1.0, 1.0, 1.0, "crypto")
         assert -1.0 <= score <= 1.0
+
+    def test_ignition_increases_positive_composite(self):
+        without = _deterministic_composite(0.5, 0.5, 0.5, "crypto")
+        with_ign = _deterministic_composite(0.5, 0.5, 0.5, "crypto", ign=1.0)
+        assert with_ign > without
+
+    def test_ignition_not_applied_to_stocks(self):
+        # stocks never receive ignition; ign param is simply not passed
+        score = _deterministic_composite(0.5, 0.5, None, "stocks")
+        assert -1.0 <= score <= 1.0
+
+    def test_ignition_none_equals_no_ignition(self):
+        without = _deterministic_composite(0.5, 0.5, 0.5, "crypto")
+        with_none = _deterministic_composite(0.5, 0.5, 0.5, "crypto", ign=None)
+        assert without == with_none
 
 
 # ---------------------------------------------------------------------------
@@ -252,6 +329,8 @@ class TestComputeSignal:
         assert -1.0 <= result.volatility_score <= 1.0
         assert result.funding_score is not None
         assert -1.0 <= result.funding_score <= 1.0
+        assert result.ignition_score is not None
+        assert -1.0 <= result.ignition_score <= 1.0
         assert -1.0 <= result.composite_score <= 1.0
         assert result.action in ("buy", "sell", "hold")
 
@@ -275,3 +354,4 @@ class TestComputeSignal:
 
         assert result is not None
         assert result.funding_score is None
+        assert result.ignition_score is None
