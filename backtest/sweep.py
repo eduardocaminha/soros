@@ -1,8 +1,12 @@
-"""Sweep runner: backtest over a configurable grid of SIGNAL_THRESHOLD values.
+"""Sweep runner: backtest over a configurable parameter grid.
 
-Runs ``run_backtest`` for each threshold, sharing a single price-load and a
-single screener call, then stores per-threshold metrics in ``sweep_results``
+Runs ``run_backtest`` for each value in the grid, sharing a single price-load
+and a single screener call, then stores per-value metrics in ``sweep_results``
 so the dashboard can serve them without repeating the (expensive) backtest.
+
+By default sweeps ``signal_threshold`` (the SIGNAL_THRESHOLD grid).  Pass a
+``SweepSpec`` to sweep any other numeric ``BacktestConfig`` field — e.g.
+``position_size_pct``, ``fee_pct`` — without rewriting the runner.
 
 This is an on-demand command — never called on page load.
 
@@ -10,6 +14,8 @@ Usage:
     python -m backtest.sweep --symbols BTC/USDT:crypto --start 2024-01-01 --end 2024-12-31
     python -m backtest.sweep --screener --start 2024-01-01 --end 2024-12-31
     python -m backtest.sweep --screener --start 2024-01-01 --end 2024-12-31 --thresholds 0.10,0.20,0.30
+    python -m backtest.sweep --symbols BTC/USDT:crypto --start 2024-01-01 --end 2024-12-31 \\
+        --param position_size_pct --thresholds 0.05,0.10,0.15,0.20
 """
 
 from __future__ import annotations
@@ -17,7 +23,7 @@ from __future__ import annotations
 import dataclasses
 import time
 import uuid
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Optional, Sequence
 
 import pandas as pd
@@ -32,18 +38,47 @@ from backtest.engine import BacktestConfig, _load_prices_from_db, run_backtest
 
 
 @dataclass
+class SweepSpec:
+    """Declares which ``BacktestConfig`` field to sweep and over what values.
+
+    Extend the sweep to any numeric ``BacktestConfig`` field without rewriting
+    ``run_sweep``.  The runner applies each value via ``dataclasses.replace``,
+    keeping all other config fields fixed.
+
+    Examples::
+
+        SweepSpec("signal_threshold", [0.15, 0.20, 0.25, 0.30, 0.35])
+        SweepSpec("position_size_pct", [0.05, 0.10, 0.15, 0.20])
+        SweepSpec("fee_pct", [0.0005, 0.001, 0.002])
+    """
+
+    param: str
+    values: list[float]
+
+    def __post_init__(self) -> None:
+        if not self.values:
+            raise ValueError("SweepSpec.values must be non-empty")
+        valid = {f.name for f in dataclasses.fields(BacktestConfig)}
+        if self.param not in valid:
+            raise ValueError(
+                f"{self.param!r} is not a BacktestConfig field; valid: {sorted(valid)}"
+            )
+
+
+@dataclass
 class SweepRow:
-    """One row in sweep_results: backtest metrics for a single threshold value."""
+    """One row in sweep_results: backtest metrics for a single parameter value."""
 
     sweep_id: str
     run_ts: int
-    signal_threshold: float
+    signal_threshold: float  # swept value (param_name identifies which field)
     total_return: float
     cagr: float
     sharpe: float
     max_dd: float
     win_rate: float
     n_trades: int
+    param_name: str = field(default="signal_threshold")
 
 
 # ---------------------------------------------------------------------------
@@ -55,31 +90,39 @@ def run_sweep(
     cfg_template: BacktestConfig,
     thresholds: Optional[Sequence[float]] = None,
     _prices_df: Optional[pd.DataFrame] = None,
+    spec: Optional[SweepSpec] = None,
 ) -> list[SweepRow]:
-    """Run backtest for each threshold, persist results, return rows.
+    """Run backtest for each parameter value, persist results, return rows.
 
     Prices and the screener universe are resolved once before the loop so
-    each threshold iteration is a pure in-memory simulation.
+    each iteration is a pure in-memory simulation.
 
     Args:
-        cfg_template: Base config. ``signal_threshold`` is overridden per
-            iteration; all other fields are preserved. ``use_screener`` /
-            ``use_assembler`` flags are resolved here then fixed for the loop.
-        thresholds: Grid of values to sweep. Defaults to
-            ``config.SWEEP_THRESHOLDS`` (0.15 / 0.20 / 0.25 / 0.30 / 0.35).
+        cfg_template: Base config. The swept field is overridden per iteration;
+            all other fields are preserved. ``use_screener`` / ``use_assembler``
+            flags are resolved here then fixed for the loop.
+        thresholds: Grid of ``signal_threshold`` values to sweep. Kept for
+            backward compatibility; prefer ``spec=`` for new callers.
         _prices_df: Pre-loaded price DataFrame (for tests; skips DB load).
+        spec: Declares which ``BacktestConfig`` field to sweep and over what
+            values.  When provided, ``thresholds`` must be omitted.  Defaults
+            to a ``signal_threshold`` sweep over ``config.SWEEP_THRESHOLDS``.
 
     Returns:
-        List of SweepRow (one per threshold), already persisted to sweep_results.
+        List of SweepRow (one per value), already persisted to sweep_results.
     """
-    if thresholds is None:
-        thresholds = config.SWEEP_THRESHOLDS
+    if spec is not None and thresholds is not None:
+        raise ValueError("Provide either 'thresholds' or 'spec', not both")
 
-    thresholds = list(thresholds)
-    if not thresholds:
-        raise ValueError("thresholds must be a non-empty sequence")
+    if spec is None:
+        _values: list[float] = (
+            list(thresholds) if thresholds is not None else list(config.SWEEP_THRESHOLDS)
+        )
+        if not _values:
+            raise ValueError("thresholds must be a non-empty sequence")
+        spec = SweepSpec(param="signal_threshold", values=_values)
 
-    # Resolve symbol list once — avoids repeated screener/API calls per threshold.
+    # Resolve symbol list once — avoids repeated screener/API calls per value.
     symbols = _resolve_symbols(cfg_template)
 
     # Build a concrete base config with explicit symbols (no screener/assembler).
@@ -90,7 +133,7 @@ def run_sweep(
         use_assembler=False,
     )
 
-    # Load prices once; shared across all threshold iterations.
+    # Load prices once; shared across all iterations.
     if _prices_df is None:
         _prices_df = _load_prices_from_db(base_cfg)
 
@@ -98,14 +141,15 @@ def run_sweep(
     run_ts = int(time.time())
 
     rows: list[SweepRow] = []
-    for threshold in thresholds:
-        cfg = dataclasses.replace(base_cfg, signal_threshold=threshold)
+    for value in spec.values:
+        cfg = dataclasses.replace(base_cfg, **{spec.param: value})
         result = run_backtest(cfg, prices_df=_prices_df)
         rows.append(
             SweepRow(
                 sweep_id=sweep_id,
                 run_ts=run_ts,
-                signal_threshold=threshold,
+                signal_threshold=value,
+                param_name=spec.param,
                 total_return=result.total_return,
                 cagr=result.cagr,
                 sharpe=result.sharpe,
@@ -160,14 +204,14 @@ def _save_sweep_rows(rows: list[SweepRow]) -> None:
     conn.executemany(
         """
         INSERT INTO sweep_results
-            (sweep_id, run_ts, signal_threshold, total_return, cagr, sharpe,
+            (sweep_id, run_ts, signal_threshold, param_name, total_return, cagr, sharpe,
              max_dd, win_rate, n_trades)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
-                r.sweep_id, r.run_ts, r.signal_threshold, r.total_return,
-                r.cagr, r.sharpe, r.max_dd, r.win_rate, r.n_trades,
+                r.sweep_id, r.run_ts, r.signal_threshold, r.param_name,
+                r.total_return, r.cagr, r.sharpe, r.max_dd, r.win_rate, r.n_trades,
             )
             for r in rows
         ],
@@ -240,7 +284,15 @@ def _parse_args(argv: list[str] | None = None):
     p.add_argument(
         "--thresholds",
         default=None,
-        help="Comma-separated threshold values (default: config.SWEEP_THRESHOLDS)",
+        help="Comma-separated values to sweep (default: config.SWEEP_THRESHOLDS)",
+    )
+    p.add_argument(
+        "--param",
+        default="signal_threshold",
+        help=(
+            "BacktestConfig field to sweep (default: signal_threshold). "
+            "Examples: position_size_pct, fee_pct."
+        ),
     )
     p.add_argument("--db", default=None, help="Override DB_PATH")
 
@@ -282,20 +334,38 @@ def main(argv: list[str] | None = None) -> None:
         use_assembler=args.assembler,
     )
 
-    rows = run_sweep(cfg, thresholds=args.thresholds)
+    sweep_values = args.thresholds  # None → SweepSpec defaults to config.SWEEP_THRESHOLDS
+    if args.param != "signal_threshold":
+        sweep_spec = SweepSpec(
+            param=args.param,
+            values=sweep_values if sweep_values else config.SWEEP_THRESHOLDS,
+        )
+        rows = run_sweep(cfg, spec=sweep_spec)
+    else:
+        rows = run_sweep(cfg, thresholds=sweep_values)
 
+    param_name = rows[0].param_name
     current_threshold = config.SIGNAL_THRESHOLD
+    param_label = param_name[:10]
     print(f"\n{'='*76}")
-    print(f"  Sweep complete — {len(rows)} thresholds  sweep_id={rows[0].sweep_id}")
     print(
-        f"  {'Threshold':>10}  {'Return':>8}  {'CAGR':>8}  "
+        f"  Sweep complete — {len(rows)} values  param={param_name}"
+        f"  sweep_id={rows[0].sweep_id}"
+    )
+    print(
+        f"  {param_label:>10}  {'Return':>8}  {'CAGR':>8}  "
         f"{'Sharpe':>7}  {'MaxDD':>7}  {'WinRate':>8}  {'Trades':>7}"
     )
     print(f"  {'-'*10}  {'-'*8}  {'-'*8}  {'-'*7}  {'-'*7}  {'-'*8}  {'-'*7}")
     for row in rows:
-        marker = " ← current" if abs(row.signal_threshold - current_threshold) < 1e-9 else ""
+        marker = (
+            " ← current"
+            if param_name == "signal_threshold"
+            and abs(row.signal_threshold - current_threshold) < 1e-9
+            else ""
+        )
         print(
-            f"  {row.signal_threshold:>10.2f}  "
+            f"  {row.signal_threshold:>10.4f}  "
             f"{row.total_return:>+8.2%}  "
             f"{row.cagr:>+8.2%}  "
             f"{row.sharpe:>7.3f}  "

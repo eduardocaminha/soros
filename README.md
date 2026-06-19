@@ -139,6 +139,50 @@ DEX boost), passado ao screener — mesma logica do loop ao vivo com SCREENER_EN
 
 ---
 
+## Sweep de parâmetros (robustez)
+
+O sweep roda o backtest sobre um grid de valores configuravel e grava as metricas por valor
+em `sweep_results`. E disparado on-demand — nunca no carregamento da pagina.
+
+```bash
+# Grid padrao de SIGNAL_THRESHOLD (0.15 / 0.20 / 0.25 / 0.30 / 0.35)
+python -m backtest.sweep --symbols BTC/USDT:crypto --start 2024-01-01 --end 2024-12-31
+
+# Grid customizado via argumento
+python -m backtest.sweep --screener --start 2024-01-01 --end 2024-12-31 --thresholds 0.10,0.20,0.30
+
+# Sweep de outro parametro (ex: position_size_pct)
+python -m backtest.sweep --symbols BTC/USDT:crypto --start 2024-01-01 --end 2024-12-31 \
+    --param position_size_pct --thresholds 0.05,0.10,0.15,0.20
+```
+
+O resultado fica disponivel no dashboard (pagina principal, secao de cenarios) marcando o
+valor atualmente em uso. O enquadramento e de **robustez**: o objetivo e ver se o desempenho
+e estavel na vizinhanca do valor escolhido — nao escolher o campiao do historico (overfitting).
+
+### Variavel de ambiente
+
+| Variavel | Default | Descricao |
+|---|---|---|
+| `SWEEP_THRESHOLDS` | `0.15,0.20,0.25,0.30,0.35` | Grid de valores para o sweep de `signal_threshold` (comma-separated). |
+
+### Extensibilidade
+
+O sweep usa `SweepSpec` para declarar qual campo do `BacktestConfig` varrer e sobre quais
+valores.  Para varrer um novo parametro (ex: `fee_pct`, `position_size_pct`), basta
+instanciar um novo spec:
+
+```python
+from backtest.sweep import SweepSpec, run_sweep
+
+spec = SweepSpec(param="position_size_pct", values=[0.05, 0.10, 0.15, 0.20])
+rows = run_sweep(cfg_template, spec=spec)
+```
+
+Qualquer campo numerico de `BacktestConfig` e suportado sem modificar o runner.
+
+---
+
 ## Configuracao em tempo real (Settings)
 
 Alem das variaveis de ambiente, o bot expoe uma camada de override runtime via tabela
