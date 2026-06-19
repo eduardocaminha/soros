@@ -138,6 +138,7 @@ def _current_equity() -> float:
 
 def _run_cycle(rm: RiskManager) -> None:
     """Execute one full bot cycle."""
+    config.reload_runtime_overrides()
     cycle_start = time.time()
     _log.info("=== cycle start ===")
 
