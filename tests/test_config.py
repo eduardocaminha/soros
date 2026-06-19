@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import importlib
 import os
+import sqlite3
 import sys
+from pathlib import Path
 
 import pytest
 
@@ -392,3 +394,118 @@ class TestDexDiscoveryConfig:
         monkeypatch.setenv("DEX_SCAN_CACHE_SECS", "600")
         importlib.reload(config)
         assert config.DEX_SCAN_CACHE_SECS == 600
+
+
+# ---------------------------------------------------------------------------
+# reload_runtime_overrides — re-read live sem restart
+# ---------------------------------------------------------------------------
+
+@pytest.fixture()
+def _runtime_db(tmp_path: Path):
+    """Create a temp DB and patch database.db to use it."""
+    db_file = str(tmp_path / "rt_test.db")
+    schema = (Path(__file__).parent.parent / "database" / "schema.sql").read_text()
+    conn = sqlite3.connect(db_file)
+    conn.executescript(schema)
+    conn.commit()
+    conn.close()
+    return db_file
+
+
+@pytest.fixture()
+def _patch_runtime_db(_runtime_db, monkeypatch):
+    import database.db as db_module
+
+    class _FakeDB:
+        def connect(self):
+            c = sqlite3.connect(_runtime_db)
+            c.row_factory = sqlite3.Row
+            return c
+
+    monkeypatch.setattr(db_module, "_db", _FakeDB())
+    return _runtime_db
+
+
+class TestReloadRuntimeOverrides:
+    """reload_runtime_overrides() applies env > settings > default without restart."""
+
+    def teardown_method(self):
+        for key in config._TUNABLE_DEFAULTS:
+            os.environ.pop(key, None)
+        importlib.reload(config)
+
+    def test_settings_override_applied_without_restart(self, _patch_runtime_db, monkeypatch):
+        from database.settings_store import set_override
+        monkeypatch.delenv("SIGNAL_THRESHOLD", raising=False)
+        set_override("SIGNAL_THRESHOLD", "0.42")
+        config.reload_runtime_overrides()
+        assert config.SIGNAL_THRESHOLD == pytest.approx(0.42)
+
+    def test_env_wins_over_settings_on_reload(self, _patch_runtime_db, monkeypatch):
+        from database.settings_store import set_override
+        set_override("SIGNAL_THRESHOLD", "0.42")
+        monkeypatch.setenv("SIGNAL_THRESHOLD", "0.77")
+        config.reload_runtime_overrides()
+        assert config.SIGNAL_THRESHOLD == pytest.approx(0.77)
+
+    def test_default_restored_when_no_env_no_override(self, _patch_runtime_db, monkeypatch):
+        monkeypatch.delenv("SIGNAL_THRESHOLD", raising=False)
+        config.reload_runtime_overrides()
+        assert config.SIGNAL_THRESHOLD == pytest.approx(0.25)
+
+    def test_int_override_applied(self, _patch_runtime_db, monkeypatch):
+        from database.settings_store import set_override
+        monkeypatch.delenv("LOOP_INTERVAL_SECONDS", raising=False)
+        set_override("LOOP_INTERVAL_SECONDS", "120")
+        config.reload_runtime_overrides()
+        assert config.LOOP_INTERVAL_SECONDS == 120
+
+    def test_bool_override_applied(self, _patch_runtime_db, monkeypatch):
+        from database.settings_store import set_override
+        monkeypatch.delenv("SCREENER_ENABLED", raising=False)
+        set_override("SCREENER_ENABLED", "true")
+        config.reload_runtime_overrides()
+        assert config.SCREENER_ENABLED is True
+
+    def test_locked_key_crypto_live_not_changed_by_reload(self, _patch_runtime_db, monkeypatch):
+        """reload_runtime_overrides must never touch execution toggles."""
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        monkeypatch.delenv("CRYPTO_LIVE", raising=False)
+        config.reload_runtime_overrides()
+        assert config.CRYPTO_LIVE is False
+
+    def test_locked_key_stocks_live_not_changed_by_reload(self, _patch_runtime_db, monkeypatch):
+        monkeypatch.setattr(config, "STOCKS_LIVE", False)
+        monkeypatch.delenv("STOCKS_LIVE", raising=False)
+        config.reload_runtime_overrides()
+        assert config.STOCKS_LIVE is False
+
+    def test_locked_key_max_drawdown_not_changed_by_reload(self, _patch_runtime_db, monkeypatch):
+        original = config.MAX_DRAWDOWN_PCT
+        config.reload_runtime_overrides()
+        assert config.MAX_DRAWDOWN_PCT == pytest.approx(original)
+
+    def test_locked_key_max_open_positions_not_changed_by_reload(self, _patch_runtime_db, monkeypatch):
+        original = config.MAX_OPEN_POSITIONS
+        config.reload_runtime_overrides()
+        assert config.MAX_OPEN_POSITIONS == original
+
+    def test_multiple_overrides_all_applied(self, _patch_runtime_db, monkeypatch):
+        from database.settings_store import set_override
+        monkeypatch.delenv("GEM_TOP_N", raising=False)
+        monkeypatch.delenv("GEM_ROC_MIN_PCT", raising=False)
+        set_override("GEM_TOP_N", "8")
+        set_override("GEM_ROC_MIN_PCT", "5.0")
+        config.reload_runtime_overrides()
+        assert config.GEM_TOP_N == 8
+        assert config.GEM_ROC_MIN_PCT == pytest.approx(5.0)
+
+    def test_delete_override_falls_back_to_default_on_next_reload(self, _patch_runtime_db, monkeypatch):
+        from database.settings_store import delete_override, set_override
+        monkeypatch.delenv("SIGNAL_THRESHOLD", raising=False)
+        set_override("SIGNAL_THRESHOLD", "0.42")
+        config.reload_runtime_overrides()
+        assert config.SIGNAL_THRESHOLD == pytest.approx(0.42)
+        delete_override("SIGNAL_THRESHOLD")
+        config.reload_runtime_overrides()
+        assert config.SIGNAL_THRESHOLD == pytest.approx(0.25)

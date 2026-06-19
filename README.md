@@ -139,6 +139,54 @@ DEX boost), passado ao screener — mesma logica do loop ao vivo com SCREENER_EN
 
 ---
 
+## Configuracao em tempo real (Settings)
+
+Alem das variaveis de ambiente, o bot expoe uma camada de override runtime via tabela
+SQLite (`settings`). Isso permite ajustar tunables sem reiniciar o processo.
+
+### Precedencia de configuracao
+
+```
+env var  >  tabela settings  >  valor default hardcoded
+```
+
+O metodo `config.reload_runtime_overrides()` e chamado no inicio de cada ciclo do bot
+e aplica essa precedencia para todas as chaves da ALLOWLIST. As variaveis de ambiente
+e os valores default sao reavaliados a cada ciclo — sem restart necessario.
+
+### Chaves editaveis (ALLOWLIST)
+
+Somente as chaves listadas em `SETTINGS_ALLOWLIST` (em `config.py`) podem ser
+alteradas pelo dashboard. Exemplos de tunables editaveis: `SIGNAL_THRESHOLD`,
+`LOOP_INTERVAL_SECONDS`, `SCREENER_ENABLED`, `GEM_TOP_N`, `POSITION_SIZE_PCT`.
+
+### Chaves travadas (LOCKED)
+
+As seguintes chaves sao **permanentemente bloqueadas** e nunca podem ser alteradas
+via settings (nem via PUT na API do dashboard):
+
+| Chave | Motivo |
+|---|---|
+| `CRYPTO_LIVE` | Toggle de execucao real — exige restart deliberado |
+| `STOCKS_LIVE` | Toggle de execucao real — exige restart deliberado |
+| `SENTIMENT_ENABLED` | Toggle de execucao real — exige restart deliberado |
+| `MAX_DRAWDOWN_PCT` | Limite de risco hard — imutavel em runtime |
+| `MAX_OPEN_POSITIONS` | Limite de risco hard — imutavel em runtime |
+
+Qualquer tentativa de escrever uma dessas chaves via API retorna HTTP 422.
+
+### API do dashboard
+
+```
+GET  /api/settings          # lista todas as variaveis com flag editavel/travado
+PUT  /api/settings/:key     # atualiza um tunable (body JSON: {"value": "..."})
+```
+
+Valores sao validados contra tipo e range definidos em `SETTINGS_ALLOWLIST` antes
+de serem persistidos.
+
+---
+
 ## Desenvolvimento
 
 ```bash
