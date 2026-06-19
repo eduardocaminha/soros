@@ -235,6 +235,13 @@ STOCK_SIGNAL_WEIGHTS: dict[str, float] = {
 # Composite score threshold to trigger a buy/sell action (else hold)
 SIGNAL_THRESHOLD: float = 0.25
 
+# Grid of SIGNAL_THRESHOLD values explored by the sweep runner (on-demand only).
+# Override via SWEEP_THRESHOLDS env var as comma-separated floats.
+SWEEP_THRESHOLDS: list[float] = [
+    float(x.strip())
+    for x in os.environ.get("SWEEP_THRESHOLDS", "0.15,0.20,0.25,0.30,0.35").split(",")
+]
+
 # Sentiment debate is only triggered when the LLM score contradicts the
 # deterministic composite, or when |composite_score| < this value.
 DEBATE_DIVERGENCE_THRESHOLD: float = 0.10
