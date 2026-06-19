@@ -344,3 +344,118 @@ class TestRunBacktest:
             # quantity should be approximately equity_at_entry * 0.10 / raw_close
             expected_min = cfg.initial_capital * cfg.position_size_pct * 0.5 / raw_close
             assert t.quantity > expected_min  # sanity — not zero or near-zero
+
+
+# ---------------------------------------------------------------------------
+# Screener integration
+# ---------------------------------------------------------------------------
+
+
+class TestBacktestScreenerIntegration:
+    """Acceptance tests: backtest reuses engine.screener.screen() for symbol selection."""
+
+    def _mock_screen(self, crypto: list[str], stocks: list[str]):
+        """Return a factory that patches screen() to return the given symbols."""
+        from engine.screener import ScreenerResult
+
+        def _screen(*args, **kwargs):
+            return ScreenerResult(
+                selected_crypto=crypto,
+                selected_stocks=stocks,
+                entries=[],
+            )
+
+        return _screen
+
+    def test_use_screener_false_uses_cfg_symbols(self):
+        """When use_screener=False, cfg.symbols drives the backtest."""
+        prices = _make_prices("BTC/USDT", "crypto", n=300, base_price=1_000.0, trend=0.0)
+        cfg = _cfg(symbols=[("BTC/USDT", "crypto")], n=300)
+        assert cfg.use_screener is False
+        result = run_backtest(cfg, prices_df=prices)
+        assert isinstance(result, BacktestResult)
+
+    def test_use_screener_true_uses_screener_symbols(self, monkeypatch):
+        """When use_screener=True, screen() replaces cfg.symbols."""
+        import engine.screener as screener_mod
+
+        monkeypatch.setattr(screener_mod, "screen", self._mock_screen(
+            crypto=["BTC/USDT"], stocks=[],
+        ))
+
+        prices = _make_prices("BTC/USDT", "crypto", n=300, base_price=1_000.0, trend=0.0)
+        cfg = BacktestConfig(
+            symbols=[],  # intentionally empty — screener should fill in
+            start_ts=_START,
+            end_ts=_START + 299 * _HOUR,
+            initial_capital=10_000.0,
+            use_screener=True,
+        )
+        result = run_backtest(cfg, prices_df=prices)
+        assert isinstance(result, BacktestResult)
+        assert len(result.equity_curve) == 300
+
+    def test_use_screener_true_ignores_cfg_symbols(self, monkeypatch):
+        """Screener override replaces whatever was in cfg.symbols."""
+        import engine.screener as screener_mod
+
+        monkeypatch.setattr(screener_mod, "screen", self._mock_screen(
+            crypto=["ETH/USDT"], stocks=[],
+        ))
+
+        prices_btc = _make_prices("BTC/USDT", "crypto", n=300, base_price=1_000.0)
+        prices_eth = _make_prices("ETH/USDT", "crypto", n=300, base_price=500.0)
+        prices = pd.concat([prices_btc, prices_eth], ignore_index=True)
+
+        cfg = BacktestConfig(
+            symbols=[("BTC/USDT", "crypto")],  # would be used if screener were off
+            start_ts=_START,
+            end_ts=_START + 299 * _HOUR,
+            initial_capital=10_000.0,
+            use_screener=True,
+        )
+        result = run_backtest(cfg, prices_df=prices)
+        # All trades should be on ETH/USDT (the screener selection), not BTC/USDT.
+        traded_syms = {t.symbol for t in result.trades}
+        assert "BTC/USDT" not in traded_syms
+
+    def test_use_screener_with_stocks(self, monkeypatch):
+        """Screener can select stocks symbols too."""
+        import engine.screener as screener_mod
+
+        monkeypatch.setattr(screener_mod, "screen", self._mock_screen(
+            crypto=[], stocks=["AAPL"],
+        ))
+
+        prices = _make_prices("AAPL", "stocks", n=300, base_price=150.0, trend=0.0,
+                              funding_rate=None)
+        cfg = BacktestConfig(
+            symbols=[],
+            start_ts=_START,
+            end_ts=_START + 299 * _HOUR,
+            initial_capital=10_000.0,
+            use_screener=True,
+        )
+        result = run_backtest(cfg, prices_df=prices)
+        assert isinstance(result, BacktestResult)
+        assert len(result.equity_curve) == 300
+
+    def test_cli_screener_flag(self, monkeypatch):
+        """--screener flag is parsed and sets use_screener=True on the config."""
+        from backtest.engine import _parse_args
+
+        args = _parse_args([
+            "--screener",
+            "--start", "2024-01-01",
+            "--end", "2024-12-31",
+        ])
+        assert args.screener is True
+        assert args.symbols == []
+
+    def test_cli_symbols_required_without_screener(self):
+        """--symbols is required when --screener is not set."""
+        import argparse
+        from backtest.engine import _parse_args
+
+        with pytest.raises(SystemExit):
+            _parse_args(["--start", "2024-01-01", "--end", "2024-12-31"])
