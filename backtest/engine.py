@@ -43,7 +43,7 @@ from typing import Optional
 import pandas as pd
 
 import config
-from signals import funding, momentum, volatility
+from signals import funding, ignition, momentum, volatility
 from signals.compute import _action, _deterministic_composite
 
 
@@ -68,6 +68,10 @@ class BacktestConfig:
     # When True, symbols are derived from engine.screener.screen() at runtime,
     # ensuring the backtest reflects the same selection logic as the live loop.
     use_screener: bool = False
+    # When True, builds the autonomous universe via data.assembler.assemble_universe()
+    # (market-cap base ∪ gem candidates with DEX boost) before calling the screener.
+    # Implies use_screener=True for the symbol selection step.
+    use_assembler: bool = False
 
     def __post_init__(self) -> None:
         if self.initial_capital is None:
@@ -176,8 +180,9 @@ def _get_signal(
     mom = momentum.compute(closes)
     vol = volatility.compute(window_df)
     fund = funding.compute(latest_funding) if asset_class == "crypto" else None
+    ign = ignition.compute(window_df) if asset_class == "crypto" else None
 
-    composite = _deterministic_composite(mom, vol, fund, asset_class)
+    composite = _deterministic_composite(mom, vol, fund, asset_class, ign=ign)
 
     # Respect the caller's threshold rather than the global config default.
     if composite >= signal_threshold:
@@ -270,11 +275,27 @@ def run_backtest(
     Returns:
         BacktestResult with all metrics and the full equity curve + trade list.
     """
-    # Resolve effective symbol list — screener takes precedence when enabled.
-    if cfg.use_screener:
+    # Resolve effective symbol list.
+    # use_assembler → build autonomous universe (market-cap base ∪ gems) then screen.
+    # use_screener  → call screen() directly with default inputs.
+    # Otherwise     → use cfg.symbols as-is.
+    if cfg.use_assembler:
+        from data.assembler import assemble_universe
+        from engine.screener import screen
+        assembled = assemble_universe()
+        screener_result = screen(
+            crypto_pinned=list(config.CRYPTO_SYMBOLS),
+            crypto_watchlist=assembled.all_symbols,
+            crypto_origins=assembled.origins,
+        )
+        effective_symbols: list[tuple[str, str]] = (
+            [(sym, "crypto") for sym in screener_result.selected_crypto]
+            + [(sym, "stocks") for sym in screener_result.selected_stocks]
+        )
+    elif cfg.use_screener:
         from engine.screener import screen
         screener_result = screen()
-        effective_symbols: list[tuple[str, str]] = (
+        effective_symbols = (
             [(sym, "crypto") for sym in screener_result.selected_crypto]
             + [(sym, "stocks") for sym in screener_result.selected_stocks]
         )
@@ -577,6 +598,12 @@ def _parse_args(argv: list[str] | None = None):
         action="store_true",
         help="Derive the symbol list from the screener (engine.screener.screen()) instead of --symbols.",
     )
+    p.add_argument(
+        "--assembler",
+        action="store_true",
+        help="Build the autonomous universe (market-cap base ∪ gem candidates) via "
+             "data.assembler.assemble_universe(), then screen. Implies --screener.",
+    )
     p.add_argument("--start", required=True, type=_parse_date, help="Start date YYYY-MM-DD (UTC)")
     p.add_argument("--end", required=True, type=_parse_date, help="End date YYYY-MM-DD (UTC)")
     p.add_argument("--capital", type=float, default=None, help="Initial capital (default: INITIAL_CAPITAL env)")
@@ -586,8 +613,8 @@ def _parse_args(argv: list[str] | None = None):
     p.add_argument("--db", default=None, help="Override DB_PATH")
 
     args = p.parse_args(argv)
-    if not args.screener and not args.symbols:
-        p.error("--symbols is required unless --screener is set")
+    if not args.screener and not args.assembler and not args.symbols:
+        p.error("--symbols is required unless --screener or --assembler is set")
     args.symbols = (
         [_parse_symbol(s.strip()) for s in args.symbols.split(",")]
         if args.symbols
@@ -613,6 +640,7 @@ def main(argv: list[str] | None = None) -> None:
         end_ts=args.end,
         initial_capital=args.capital,  # None → __post_init__ fills from config
         use_screener=args.screener,
+        use_assembler=args.assembler,
     )
 
     result = run_backtest(cfg)

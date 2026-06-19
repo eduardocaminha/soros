@@ -102,7 +102,7 @@ export async function GET() {
       screener = rows(
         db,
         `SELECT symbol, asset_class, is_pinned, volume_usd_24h, composite_score,
-                sentiment_score, conviction, selected, reason, run_ts
+                sentiment_score, conviction, selected, reason, origin, run_ts
          FROM screener_runs
          WHERE run_ts = (SELECT MAX(run_ts) FROM screener_runs)
          ORDER BY asset_class, is_pinned DESC, selected DESC, conviction DESC`

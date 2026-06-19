@@ -83,6 +83,7 @@ interface ScreenerEntry {
   conviction: number;
   selected: number;
   reason: string;
+  origin: string;
   run_ts: number;
 }
 
@@ -321,6 +322,19 @@ const REASON_LABELS: Record<string, string> = {
   not_ranked: "not ranked",
 };
 
+const ORIGIN_LABELS: Record<string, string> = {
+  base: "base",
+  gem: "gem",
+  dex_boosted: "dex",
+};
+
+function originBadge(origin: string) {
+  if (!origin) return <span className="neutral">—</span>;
+  if (origin === "base") return <span className="badge badge-open">{ORIGIN_LABELS[origin] ?? origin}</span>;
+  if (origin === "dex_boosted") return <span className="badge badge-warn">{ORIGIN_LABELS[origin] ?? origin}</span>;
+  return <span className="badge badge-filled">{ORIGIN_LABELS[origin] ?? origin}</span>;
+}
+
 function ScreenerTable({ screener }: { screener: ScreenerEntry[] }) {
   if (screener.length === 0) return null;
   const runTs = screener[0]?.run_ts;
@@ -333,7 +347,7 @@ function ScreenerTable({ screener }: { screener: ScreenerEntry[] }) {
       <table>
         <thead>
           <tr>
-            <th>Symbol</th><th>Class</th><th>Type</th><th>Vol 24h (USD)</th>
+            <th>Symbol</th><th>Class</th><th>Origin</th><th>Type</th><th>Vol 24h (USD)</th>
             <th>Composite</th><th>Sentiment</th><th>Conviction</th><th>Status</th>
           </tr>
         </thead>
@@ -342,6 +356,7 @@ function ScreenerTable({ screener }: { screener: ScreenerEntry[] }) {
             <tr key={i} style={{ opacity: e.selected ? 1 : 0.55 }}>
               <td><b>{e.symbol}</b></td>
               <td className="neutral">{e.asset_class}</td>
+              <td>{originBadge(e.origin)}</td>
               <td>{e.is_pinned ? <span className="badge badge-open">pinned</span> : <span className="neutral">watch</span>}</td>
               <td className="neutral">{e.volume_usd_24h >= 1_000_000 ? `$${(e.volume_usd_24h / 1_000_000).toFixed(1)}M` : e.volume_usd_24h > 0 ? `$${(e.volume_usd_24h / 1_000).toFixed(0)}K` : "—"}</td>
               <td>{fmtScore(e.composite_score)}</td>
