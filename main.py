@@ -1,12 +1,13 @@
 """Soros trading bot — main entry point.
 
 Runs a single-threaded loop that:
-  1. Collects OHLCV price data (crypto via Binance/ccxt, stocks via Alpaca/yfinance)
-  2. Computes deterministic signals (momentum + volatility + funding_rate)
-  3. Runs the sentiment pipeline when SENTIMENT_ENABLED=true
-  4. Aggregates signals (blends sentiment into composite)
-  5. Executes orders (paper or live, per CRYPTO_LIVE / STOCKS_LIVE toggles)
-  6. Snapshots equity for drawdown tracking
+  1. Collects OHLCV price data for the full universe (pinned ∪ watchlist)
+  2. Screens the universe → selected_crypto ∪ selected_stocks (pinned always in)
+  3. Computes deterministic signals for selected symbols
+  4. Runs the sentiment pipeline when SENTIMENT_ENABLED=true
+  5. Aggregates signals (blends sentiment into composite) for selected symbols
+  6. Executes orders (paper or live, per CRYPTO_LIVE / STOCKS_LIVE toggles)
+  7. Snapshots equity for drawdown tracking
 
 Loop cadence is controlled by LOOP_INTERVAL_SECONDS (default: 3600 = 1 h).
 Stop with SIGINT (Ctrl+C) or SIGTERM.
@@ -24,6 +25,7 @@ from data import stocks_collector
 from database.db import get_connection, get_logger
 from engine import order_executor, signal_aggregator, stocks_executor
 from engine.risk_manager import RiskManager
+from engine.screener import screen
 from sentiment import runner as sentiment_runner
 from signals import compute as signals_compute
 
@@ -86,39 +88,59 @@ def _run_cycle(rm: RiskManager) -> None:
     cycle_start = time.time()
     _log.info("=== cycle start ===")
 
-    # 1. Collect price data
+    # 1. Collect price data for the full universe (pinned ∪ watchlist)
     _log.info("collecting crypto OHLCV")
     crypto_collector.collect_once()
 
     _log.info("collecting stocks OHLCV")
     stocks_collector.collect_once()
 
-    # 2. Compute deterministic signals
+    # 2. Screen the universe — select symbols to operate this cycle.
+    #    When SCREENER_ENABLED=False (default), returns pinned only.
+    screener_result = screen()
+    sel_crypto = screener_result.selected_crypto
+    sel_stocks = screener_result.selected_stocks
+    _log.info(
+        "screener: crypto=%s stocks=%s (SCREENER_ENABLED=%s)",
+        sel_crypto,
+        sel_stocks,
+        config.SCREENER_ENABLED,
+    )
+
+    # 3. Compute deterministic signals for selected symbols only
     _log.info("computing deterministic signals")
-    signal_results = signals_compute.compute_once()
+    signal_results = signals_compute.compute_once(
+        crypto_symbols=sel_crypto,
+        stock_symbols=sel_stocks,
+    )
 
     det_scores: dict[str, float] = {r.symbol: r.composite_score for r in signal_results}
 
-    # 3. Sentiment pipeline (best-effort; bot continues on failure)
+    # 4. Sentiment pipeline (best-effort; bot continues on failure)
     if config.SENTIMENT_ENABLED:
         _log.info("running sentiment pipeline")
         try:
             sentiment_runner.run(
+                crypto_symbols=sel_crypto,
+                stock_symbols=sel_stocks,
                 deterministic_scores=det_scores,
             )
         except Exception as exc:
             _log.error("sentiment pipeline failed — continuing without sentiment: %s", exc)
 
-    # 4. Aggregate signals (blends in sentiment from SQLite)
+    # 5. Aggregate signals (blends in sentiment from SQLite) for selected symbols
     _log.info("aggregating signals")
-    aggregated = signal_aggregator.aggregate_once()
+    aggregated = signal_aggregator.aggregate_once(
+        crypto_symbols=sel_crypto,
+        stock_symbols=sel_stocks,
+    )
 
-    # 5. Mark open positions to market, then compute equity
+    # 6. Mark open positions to market, then compute equity
     _mark_to_market()
     is_paper = not (config.CRYPTO_LIVE or config.STOCKS_LIVE)
     equity = _current_equity()
 
-    # 6. Execute orders
+    # 7. Execute orders
     _log.info("executing orders (equity=%.2f, paper=%s)", equity, is_paper)
     crypto_results = order_executor.execute_once(aggregated, equity)
     stocks_results = stocks_executor.execute_stocks_once(aggregated, equity)
@@ -134,7 +156,7 @@ def _run_cycle(rm: RiskManager) -> None:
     else:
         _log.info("no orders placed this cycle")
 
-    # 7. Snapshot equity for drawdown tracking
+    # 8. Snapshot equity for drawdown tracking
     rm.record_equity(equity, is_paper=is_paper)
 
     elapsed = time.time() - cycle_start
@@ -149,16 +171,23 @@ def main() -> None:
     config.validate_config()
 
     _log.info(
-        "toggles: CRYPTO_LIVE=%s STOCKS_LIVE=%s SENTIMENT_ENABLED=%s",
+        "toggles: CRYPTO_LIVE=%s STOCKS_LIVE=%s SENTIMENT_ENABLED=%s SCREENER_ENABLED=%s",
         config.CRYPTO_LIVE,
         config.STOCKS_LIVE,
         config.SENTIMENT_ENABLED,
+        config.SCREENER_ENABLED,
     )
     _log.info(
-        "symbols: crypto=%s stocks=%s",
+        "pinned: crypto=%s stocks=%s",
         config.CRYPTO_SYMBOLS,
         config.STOCK_SYMBOLS,
     )
+    if config.SCREENER_ENABLED:
+        _log.info(
+            "watchlist: crypto=%s stocks=%s",
+            config.CRYPTO_WATCHLIST,
+            config.STOCK_WATCHLIST,
+        )
     _log.info("loop interval: %ds", config.LOOP_INTERVAL_SECONDS)
 
     # Ensure the DB is initialised before the first cycle
