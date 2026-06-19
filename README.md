@@ -67,6 +67,7 @@ cp .env.example .env
 | `GEM_TOP_N` | `5` | Maximo de gems surfacados por ciclo. |
 | `GEM_MIN_VOLUME_USD` | `500000` | Piso de liquidez (USD 24h) para candidatos gem. |
 | `IGNITION_WEIGHT` | `0.15` | Peso do sinal de ignicao no composite (0.0 = desabilitado). |
+| `GEM_POSITION_SIZE_PCT` | `0.05` | Fracao do equity alocada por posicao gem (menor que base; deve ser <= POSITION_SIZE_PCT). |
 | `GEM_TRAILING_STOP_PCT` | `0.05` | Trailing stop para posicoes gem (fracao, ex: 0.05 = 5%). 0.0 = desabilitado. |
 
 ### Screener
@@ -123,14 +124,18 @@ python -m backtest --symbols BTC/USDT:crypto,AAPL:stocks --start 2024-01-01 --en
 # Usando o screener para determinar os simbolos (reusa a mesma logica do loop live)
 python -m backtest --screener --start 2024-01-01 --end 2024-12-31
 
+# Universo autonomo completo: market-cap base ∪ gem candidates + screener
+python -m backtest --assembler --start 2024-01-01 --end 2024-12-31
+
 # Salvar resultados em JSON
 python -m backtest --symbols BTC/USDT:crypto --start 2024-01-01 --end 2024-12-31 --output json --out resultado
 ```
 
-O backtest replica o pipeline deterministico completo (momentum + volatility + funding).
+O backtest replica o pipeline deterministico completo (momentum + volatility + funding + ignition).
 Sentimento e excluido (sem replay de LLM). Quando `--screener` e usado, a lista de
-simbolos vem de `engine.screener.screen()`, garantindo que o backtest reflita a mesma
-selecao do loop ao vivo.
+simbolos vem de `engine.screener.screen()`. Quando `--assembler` e usado, o universo e
+construido via `data.assembler.assemble_universe()` (market-cap base ∪ gem candidates com
+DEX boost), passado ao screener — mesma logica do loop ao vivo com SCREENER_ENABLED=true.
 
 ---
 

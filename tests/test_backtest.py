@@ -459,3 +459,230 @@ class TestBacktestScreenerIntegration:
 
         with pytest.raises(SystemExit):
             _parse_args(["--start", "2024-01-01", "--end", "2024-12-31"])
+
+
+# ---------------------------------------------------------------------------
+# Assembler integration (autonomous universe)
+# ---------------------------------------------------------------------------
+
+
+class TestBacktestAssemblerIntegration:
+    """Acceptance: backtest uses autonomous universe via data.assembler when use_assembler=True."""
+
+    def _mock_assembled(self, symbols: list[str], origins: dict[str, str]):
+        """Return a factory that patches assemble_universe() to return a stub."""
+        from data.assembler import AssembledUniverse
+
+        def _assemble(*args, **kwargs):
+            base = [s for s, o in origins.items() if o == "base"]
+            gems = [s for s, o in origins.items() if o in ("gem", "dex_boosted")]
+            dex_b: frozenset[str] = frozenset(s for s, o in origins.items() if o == "dex_boosted")
+            return AssembledUniverse(
+                base_symbols=base,
+                gem_symbols=gems,
+                dex_boosted_symbols=dex_b,
+                all_symbols=symbols,
+                origins=origins,
+                gem_candidates=[],
+            )
+
+        return _assemble
+
+    def _mock_screen(self, crypto: list[str]):
+        from engine.screener import ScreenerResult
+
+        def _screen(*args, **kwargs):
+            return ScreenerResult(selected_crypto=crypto, selected_stocks=[], entries=[])
+
+        return _screen
+
+    def test_use_assembler_calls_assemble_universe(self, monkeypatch):
+        """When use_assembler=True, assemble_universe() is called to build the universe."""
+        import data.assembler as assembler_mod
+        import engine.screener as screener_mod
+
+        called = {"assembler": False}
+
+        orig_assemble = self._mock_assembled(
+            ["BTC/USDT", "ETH/USDT"], {"BTC/USDT": "base", "ETH/USDT": "gem"}
+        )
+
+        def _tracking_assemble(*a, **kw):
+            called["assembler"] = True
+            return orig_assemble(*a, **kw)
+
+        monkeypatch.setattr(assembler_mod, "assemble_universe", _tracking_assemble)
+        monkeypatch.setattr(screener_mod, "screen", self._mock_screen(["BTC/USDT"]))
+
+        prices = _make_prices("BTC/USDT", "crypto", n=300, base_price=1_000.0, trend=0.0)
+        cfg = BacktestConfig(
+            symbols=[],
+            start_ts=_START,
+            end_ts=_START + 299 * _HOUR,
+            initial_capital=10_000.0,
+            use_assembler=True,
+        )
+        result = run_backtest(cfg, prices_df=prices)
+        assert called["assembler"], "assemble_universe() was not called with use_assembler=True"
+        assert isinstance(result, BacktestResult)
+
+    def test_use_assembler_passes_origins_to_screener(self, monkeypatch):
+        """Origins from the assembler are forwarded to screen() as crypto_origins."""
+        import data.assembler as assembler_mod
+        import engine.screener as screener_mod
+
+        received_origins: dict[str, str] = {}
+
+        monkeypatch.setattr(
+            assembler_mod,
+            "assemble_universe",
+            self._mock_assembled(
+                ["BTC/USDT", "SOL/USDT"],
+                {"BTC/USDT": "base", "SOL/USDT": "gem"},
+            ),
+        )
+
+        def _capturing_screen(*args, **kwargs):
+            received_origins.update(kwargs.get("crypto_origins") or {})
+            from engine.screener import ScreenerResult
+            return ScreenerResult(selected_crypto=["BTC/USDT"], selected_stocks=[], entries=[])
+
+        monkeypatch.setattr(screener_mod, "screen", _capturing_screen)
+
+        prices = _make_prices("BTC/USDT", "crypto", n=300, base_price=1_000.0, trend=0.0)
+        cfg = BacktestConfig(
+            symbols=[],
+            start_ts=_START,
+            end_ts=_START + 299 * _HOUR,
+            initial_capital=10_000.0,
+            use_assembler=True,
+        )
+        run_backtest(cfg, prices_df=prices)
+        assert received_origins.get("BTC/USDT") == "base"
+        assert received_origins.get("SOL/USDT") == "gem"
+
+    def test_use_assembler_result_is_valid(self, monkeypatch):
+        """Backtest with use_assembler=True produces a valid BacktestResult."""
+        import data.assembler as assembler_mod
+        import engine.screener as screener_mod
+
+        monkeypatch.setattr(
+            assembler_mod,
+            "assemble_universe",
+            self._mock_assembled(["ETH/USDT"], {"ETH/USDT": "gem"}),
+        )
+        monkeypatch.setattr(screener_mod, "screen", self._mock_screen(["ETH/USDT"]))
+
+        prices = _make_prices("ETH/USDT", "crypto", n=300, base_price=2_000.0, trend=5.0)
+        cfg = BacktestConfig(
+            symbols=[],
+            start_ts=_START,
+            end_ts=_START + 299 * _HOUR,
+            initial_capital=10_000.0,
+            use_assembler=True,
+        )
+        result = run_backtest(cfg, prices_df=prices)
+        assert isinstance(result, BacktestResult)
+        assert result.initial_capital == 10_000.0
+        assert 0.0 <= result.win_rate <= 1.0
+        assert result.max_drawdown >= 0.0
+
+    def test_use_assembler_false_does_not_call_assemble_universe(self, monkeypatch):
+        """use_assembler=False never calls assemble_universe()."""
+        import data.assembler as assembler_mod
+
+        called = {"assembler": False}
+
+        def _should_not_be_called(*a, **kw):
+            called["assembler"] = True
+            raise AssertionError("assemble_universe should not be called")
+
+        monkeypatch.setattr(assembler_mod, "assemble_universe", _should_not_be_called)
+
+        prices = _make_prices("BTC/USDT", "crypto", n=300, base_price=1_000.0, trend=0.0)
+        cfg = _cfg(symbols=[("BTC/USDT", "crypto")], n=300)
+        run_backtest(cfg, prices_df=prices)
+        assert not called["assembler"]
+
+    def test_cli_assembler_flag(self):
+        """--assembler flag is parsed and sets use_assembler=True."""
+        from backtest.engine import _parse_args
+
+        args = _parse_args([
+            "--assembler",
+            "--start", "2024-01-01",
+            "--end", "2024-12-31",
+        ])
+        assert args.assembler is True
+        assert args.symbols == []
+
+    def test_cli_symbols_not_required_with_assembler(self):
+        """--symbols is not required when --assembler is set."""
+        from backtest.engine import _parse_args
+
+        args = _parse_args([
+            "--assembler",
+            "--start", "2024-01-01",
+            "--end", "2024-12-31",
+        ])
+        assert args.assembler is True
+
+
+# ---------------------------------------------------------------------------
+# Ignition signal in backtest
+# ---------------------------------------------------------------------------
+
+
+class TestBacktestIgnitionSignal:
+    """Acceptance: backtest computes ignition signal as part of the composite."""
+
+    def test_ignition_included_in_composite(self):
+        """A volume surge combined with rising prices raises the composite vs flat baseline."""
+        # Build price data with a volume spike + price move at the end.
+        # Use slightly varying baseline volumes so std > 0 (required for vol z-score).
+        import math as _math
+        n = 50
+        rows_spike = []
+        rows_flat = []
+        base_price = 1_000.0
+        rise = 5.0  # price increases per candle — also helps ignition ROC fire
+        for i in range(n):
+            close = base_price + rise * i
+            # Baseline: slowly varying volumes so std > 0
+            base_vol = 5_000.0 + 100.0 * _math.sin(i)
+            # Spike: large surge on last candle
+            spike_vol = 30_000.0 if i == n - 1 else base_vol
+
+            rows_spike.append({
+                "symbol": "BTC/USDT", "asset_class": "crypto",
+                "ts": _START + i * _HOUR,
+                "open": close, "high": close * 1.005, "low": close * 0.995,
+                "close": close, "volume": spike_vol, "funding_rate": 0.0001,
+            })
+            rows_flat.append({
+                "symbol": "BTC/USDT", "asset_class": "crypto",
+                "ts": _START + i * _HOUR,
+                "open": close, "high": close * 1.005, "low": close * 0.995,
+                "close": close, "volume": base_vol, "funding_rate": 0.0001,
+            })
+
+        df_spike = pd.DataFrame(rows_spike)
+        df_flat = pd.DataFrame(rows_flat)
+
+        from backtest.engine import _get_signal
+        composite_spike, _ = _get_signal(df_spike, "crypto", 0.01)
+        composite_flat, _ = _get_signal(df_flat, "crypto", 0.01)
+
+        # Volume spike (z-score positive) + same rising trend → ignition fires → higher composite
+        assert composite_spike > composite_flat, (
+            f"ignition signal not factored in: spike={composite_spike:.4f} flat={composite_flat:.4f}"
+        )
+
+    def test_ignition_not_computed_for_stocks(self):
+        """_get_signal for stocks returns the same composite as crypto without ignition."""
+        df = _make_prices(symbol="AAPL", asset_class="stocks", n=50, funding_rate=None)
+        from backtest.engine import _get_signal
+        composite, action = _get_signal(df, "stocks", 0.25)
+        # Stocks should not raise due to ignition; result must be a valid float.
+        assert -1.0 <= composite <= 1.0
+        assert action in ("buy", "sell", "hold")

@@ -63,12 +63,20 @@ def _create_wal_db(db_path: Path) -> None:
         """CREATE TABLE screener_runs (
             run_ts INTEGER, symbol TEXT, asset_class TEXT, is_pinned INTEGER,
             volume_usd_24h REAL, composite_score REAL, sentiment_score REAL,
-            conviction REAL, selected INTEGER, reason TEXT
+            conviction REAL, selected INTEGER, reason TEXT, origin TEXT DEFAULT ''
         )"""
     )
     conn.execute(
         """INSERT INTO screener_runs VALUES
-            (1700000000, 'BTC/USDT', 'crypto', 1, 2000000.0, 0.7, 0.5, 0.7, 1, 'pinned')"""
+            (1700000000, 'BTC/USDT', 'crypto', 1, 2000000.0, 0.7, 0.5, 0.7, 1, 'pinned', 'base')"""
+    )
+    conn.execute(
+        """INSERT INTO screener_runs VALUES
+            (1700000000, 'SOL/USDT', 'crypto', 0, 1500000.0, 0.5, 0.3, 0.5, 1, 'screener', 'gem')"""
+    )
+    conn.execute(
+        """INSERT INTO screener_runs VALUES
+            (1700000000, 'DOGE/USDT', 'crypto', 0, 800000.0, 0.6, 0.4, 0.6, 0, 'not_ranked', 'dex_boosted')"""
     )
     conn.commit()
     conn.close()
@@ -172,9 +180,10 @@ def test_screener_rows_returned(tmp_path: Path) -> None:
 import {{ Database }} from "bun:sqlite";
 const db = new Database({json.dumps(str(db_path))}, {{ readwrite: true, create: false }});
 const rows = db.prepare(
-  `SELECT symbol, asset_class, is_pinned, selected, reason
+  `SELECT symbol, asset_class, is_pinned, selected, reason, origin
    FROM screener_runs
-   WHERE run_ts = (SELECT MAX(run_ts) FROM screener_runs)`
+   WHERE run_ts = (SELECT MAX(run_ts) FROM screener_runs)
+   ORDER BY symbol`
 ).all();
 db.close();
 process.stdout.write(JSON.stringify(rows));
@@ -187,8 +196,44 @@ process.stdout.write(JSON.stringify(rows));
     )
     assert result.returncode == 0, f"bun process crashed: {result.stderr}"
     rows = json.loads(result.stdout)
-    assert len(rows) == 1
-    assert rows[0]["symbol"] == "BTC/USDT"
-    assert rows[0]["is_pinned"] == 1
-    assert rows[0]["selected"] == 1
-    assert rows[0]["reason"] == "pinned"
+    by_sym = {r["symbol"]: r for r in rows}
+    assert "BTC/USDT" in by_sym
+    assert by_sym["BTC/USDT"]["is_pinned"] == 1
+    assert by_sym["BTC/USDT"]["selected"] == 1
+    assert by_sym["BTC/USDT"]["reason"] == "pinned"
+    assert by_sym["BTC/USDT"]["origin"] == "base"
+
+
+@pytest.mark.skipif(
+    shutil.which("bun") is None,
+    reason="bun runtime not available",
+)
+def test_screener_origin_field_returned(tmp_path: Path) -> None:
+    """Route returns origin tags (base/gem/dex_boosted) for each screener entry."""
+    db_path = tmp_path / "soros.db"
+    _create_wal_db(db_path)
+
+    bun_script = f"""
+import {{ Database }} from "bun:sqlite";
+const db = new Database({json.dumps(str(db_path))}, {{ readwrite: true, create: false }});
+const rows = db.prepare(
+  `SELECT symbol, origin
+   FROM screener_runs
+   WHERE run_ts = (SELECT MAX(run_ts) FROM screener_runs)
+   ORDER BY symbol`
+).all();
+db.close();
+process.stdout.write(JSON.stringify(rows));
+"""
+    result = subprocess.run(
+        ["bun", "-e", bun_script],
+        capture_output=True,
+        text=True,
+        timeout=30,
+    )
+    assert result.returncode == 0, f"bun process crashed: {result.stderr}"
+    rows = json.loads(result.stdout)
+    origins = {r["symbol"]: r["origin"] for r in rows}
+    assert origins.get("BTC/USDT") == "base"
+    assert origins.get("SOL/USDT") == "gem"
+    assert origins.get("DOGE/USDT") == "dex_boosted"
