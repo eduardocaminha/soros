@@ -49,9 +49,15 @@ class RiskManager:
 
         return True, ""
 
-    def position_size(self, equity: float) -> float:
-        """Dollar amount to allocate for one new position."""
-        return equity * config.POSITION_SIZE_PCT
+    def position_size(self, equity: float, *, is_gem: bool = False) -> float:
+        """Dollar amount to allocate for one new position.
+
+        Gem-origin positions use GEM_POSITION_SIZE_PCT (smaller) to limit
+        exposure to volatile candidates.  Drawdown gate and position cap are
+        enforced regardless and cannot be bypassed.
+        """
+        pct = config.GEM_POSITION_SIZE_PCT if is_gem else config.POSITION_SIZE_PCT
+        return equity * pct
 
     def record_equity(self, equity: float, is_paper: bool = True) -> None:
         """Snapshot current equity; update running peak and drawdown in equity_curve."""

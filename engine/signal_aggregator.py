@@ -36,6 +36,7 @@ class AggregatedSignal:
     composite_score: float
     action: str  # 'buy' | 'sell' | 'hold'
     ignition_score: float | None = None  # None for stocks; added after initial schema
+    origin: str = ""  # 'base' | 'gem' | 'dex_boosted' | '' — stamped by aggregate_once
 
 
 def _final_composite(
@@ -149,26 +150,33 @@ def aggregate_signal(symbol: str, asset_class: str = "crypto") -> AggregatedSign
 def aggregate_once(
     crypto_symbols: list[str] | None = None,
     stock_symbols: list[str] | None = None,
+    origins: dict[str, str] | None = None,
 ) -> list[AggregatedSignal]:
     """Aggregate signals for all configured symbols.
 
     Args:
         crypto_symbols: Override; defaults to config.CRYPTO_SYMBOLS.
         stock_symbols:  Override; defaults to config.STOCK_SYMBOLS.
+        origins:        Optional symbol → origin map from the universe assembler.
+                        When provided, each AggregatedSignal.origin is stamped so
+                        the order executor can apply gem-specific risk rules.
 
     Returns:
         List of AggregatedSignal for every symbol that had a signal row.
     """
+    _origins: dict[str, str] = origins or {}
     results: list[AggregatedSignal] = []
 
     for sym in crypto_symbols or config.CRYPTO_SYMBOLS:
         r = aggregate_signal(sym, "crypto")
         if r is not None:
+            r.origin = _origins.get(sym, "")
             results.append(r)
 
     for sym in stock_symbols or config.STOCK_SYMBOLS:
         r = aggregate_signal(sym, "stocks")
         if r is not None:
+            r.origin = _origins.get(sym, "")
             results.append(r)
 
     return results

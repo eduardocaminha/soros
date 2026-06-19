@@ -53,6 +53,16 @@ class TestPositionSize:
     def test_zero_equity(self, rm: RiskManager):
         assert rm.position_size(0.0) == 0.0
 
+    def test_gem_uses_smaller_size(self, rm: RiskManager):
+        base_size = rm.position_size(10_000, is_gem=False)
+        gem_size = rm.position_size(10_000, is_gem=True)
+        # GEM_POSITION_SIZE_PCT (0.05) < POSITION_SIZE_PCT (0.10)
+        assert gem_size == pytest.approx(10_000 * config.GEM_POSITION_SIZE_PCT)
+        assert gem_size < base_size
+
+    def test_gem_size_zero_equity(self, rm: RiskManager):
+        assert rm.position_size(0.0, is_gem=True) == 0.0
+
 
 # ---------------------------------------------------------------------------
 # record_equity + _current_drawdown

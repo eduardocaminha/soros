@@ -312,7 +312,7 @@ class TestRunCycle:
             )
 
     def test_cycle_forwards_selected_symbols_to_aggregate(self):
-        """aggregate_once must receive the screener-selected symbols."""
+        """aggregate_once must receive the screener-selected symbols (and origins)."""
         from engine.risk_manager import RiskManager
         from main import _run_cycle
 
@@ -331,10 +331,11 @@ class TestRunCycle:
             patch("main.screen", return_value=screener_result),
         ):
             _run_cycle(rm)
-            mock_aggregate.assert_called_once_with(
-                crypto_symbols=["BTC/USDT", "SOL/USDT"],
-                stock_symbols=["AAPL", "NVDA"],
-            )
+            mock_aggregate.assert_called_once()
+            kwargs = mock_aggregate.call_args[1]
+            assert kwargs["crypto_symbols"] == ["BTC/USDT", "SOL/USDT"]
+            assert kwargs["stock_symbols"] == ["AAPL", "NVDA"]
+            assert "origins" in kwargs  # origins dict is now always passed
 
     def test_cycle_forwards_selected_symbols_to_sentiment(self):
         """sentiment_runner.run must receive the screener-selected symbols."""

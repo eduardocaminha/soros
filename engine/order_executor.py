@@ -78,6 +78,9 @@ def _signal_ts(signal_id: int) -> int | None:
     return int(row["ts"]) if row else None
 
 
+_GEM_ORIGINS = frozenset(("gem", "dex_boosted"))
+
+
 def _insert_position(
     symbol: str,
     asset_class: str,
@@ -85,15 +88,20 @@ def _insert_position(
     quantity: float,
     price: float,
     is_paper: bool,
+    origin: str = "",
 ) -> int:
+    # Gem positions start their trailing peak at the entry price.
+    trailing_peak: float | None = price if origin in _GEM_ORIGINS else None
     conn = get_connection()
     cur = conn.execute(
         """
         INSERT INTO positions
-            (symbol, asset_class, side, quantity, entry_price, current_price, is_paper)
-        VALUES (?, ?, ?, ?, ?, ?, ?)
+            (symbol, asset_class, side, quantity, entry_price, current_price,
+             is_paper, origin, trailing_peak_price)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
-        (symbol, asset_class, side, quantity, price, price, int(is_paper)),
+        (symbol, asset_class, side, quantity, price, price,
+         int(is_paper), origin, trailing_peak),
     )
     conn.commit()
     return cur.lastrowid  # type: ignore[return-value]
@@ -215,7 +223,8 @@ class OrderExecutor:
             _log.warning("no price for %s — cannot size position", signal.symbol)
             return None
 
-        size_usd = self._rm.position_size(equity)
+        is_gem = getattr(signal, "origin", "") in _GEM_ORIGINS
+        size_usd = self._rm.position_size(equity, is_gem=is_gem)
         quantity = size_usd / price
         is_paper = not config.CRYPTO_LIVE
         exchange_id: str | None = None
@@ -227,8 +236,9 @@ class OrderExecutor:
         else:
             price = price * (1.0 + config.FEE_PCT + config.SLIPPAGE_PCT)
 
+        origin = getattr(signal, "origin", "")
         pos_id = _insert_position(
-            signal.symbol, signal.asset_class, "long", quantity, price, is_paper
+            signal.symbol, signal.asset_class, "long", quantity, price, is_paper, origin
         )
         order_id = _insert_order(
             signal.symbol, signal.asset_class, "buy", quantity, price,
@@ -236,11 +246,13 @@ class OrderExecutor:
         )
 
         _log.info(
-            "%s buy %s qty=%.6f price=%.4f",
+            "%s buy %s qty=%.6f price=%.4f origin=%s gem_sized=%s",
             "paper" if is_paper else "LIVE",
             signal.symbol,
             quantity,
             price,
+            origin or "n/a",
+            is_gem,
         )
         return OrderResult(
             symbol=signal.symbol,
@@ -299,6 +311,61 @@ class OrderExecutor:
         return OrderResult(
             symbol=signal.symbol,
             asset_class=signal.asset_class,
+            side="sell",
+            quantity=quantity,
+            price=price,
+            is_paper=is_paper,
+            order_id=order_id,
+            position_id=pos_id,
+            exchange_id=exchange_id,
+        )
+
+    def force_close(self, symbol: str) -> OrderResult | None:
+        """Close an open position by symbol (e.g., trailing stop trigger).
+
+        Uses the position's own is_paper flag so live/paper mode is preserved
+        regardless of the current CRYPTO_LIVE toggle.
+        """
+        pos = _get_open_position(symbol)
+        if pos is None:
+            _log.info("force_close: no open position for %s", symbol)
+            return None
+
+        price = _latest_close(symbol)
+        if price is None or price <= 0.0:
+            _log.warning("force_close: no price for %s", symbol)
+            return None
+
+        quantity = float(pos["quantity"])
+        entry_price = float(pos["entry_price"])
+        is_paper = bool(pos["is_paper"])
+        exchange_id: str | None = None
+
+        if not is_paper:
+            exchange_id, price = self._place_live(symbol, "sell", quantity, price)
+            if exchange_id is None:
+                return None
+        else:
+            price = price * (1.0 - config.FEE_PCT - config.SLIPPAGE_PCT)
+
+        realized_pnl = (price - entry_price) * quantity
+        pos_id = int(pos["id"])
+        _close_position_db(pos_id, price, realized_pnl)
+        order_id = _insert_order(
+            symbol, "crypto", "sell", quantity, price,
+            is_paper, exchange_id, pos_id, None,
+        )
+        _log.info(
+            "%s trailing_stop_close %s qty=%.6f price=%.4f pnl=%+.4f",
+            "paper" if is_paper else "LIVE",
+            symbol,
+            quantity,
+            price,
+            realized_pnl,
+        )
+        return OrderResult(
+            symbol=symbol,
+            asset_class="crypto",
             side="sell",
             quantity=quantity,
             price=price,

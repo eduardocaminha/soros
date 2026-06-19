@@ -155,8 +155,14 @@ GEM_MIN_VOLUME_USD: float = float(os.environ.get("GEM_MIN_VOLUME_USD", "500000")
 IGNITION_WEIGHT: float = float(os.environ.get("IGNITION_WEIGHT", "0.15"))
 
 # ---------------------------------------------------------------------------
-# Gem risk — trailing stop
+# Gem risk — position sizing + trailing stop
 # ---------------------------------------------------------------------------
+
+# Position size fraction for gem-origin positions (smaller than base, default 5 %).
+# Must be <= POSITION_SIZE_PCT.  Set equal to disable the distinction.
+GEM_POSITION_SIZE_PCT: float = float(
+    os.environ.get("GEM_POSITION_SIZE_PCT", "0.05")
+)
 
 # Trailing stop distance (fraction, e.g. 0.05 = 5 %) for gem-origin positions.
 # Set to 0.0 to disable trailing stops for gems.

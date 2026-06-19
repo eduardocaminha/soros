@@ -25,6 +25,7 @@ from data import stocks_collector
 from data.assembler import assemble_universe
 from database.db import get_connection, get_logger
 from engine import order_executor, signal_aggregator, stocks_executor
+from engine.order_executor import OrderExecutor
 from engine.risk_manager import RiskManager
 from engine.screener import save_screener_result, screen
 from sentiment import runner as sentiment_runner
@@ -42,10 +43,11 @@ def _handle_signal(signum: int, _frame: object) -> None:
 
 
 def _mark_to_market() -> None:
-    """Update current_price and unrealized_pnl for all open positions."""
+    """Update current_price, unrealized_pnl, and trailing_peak_price for all open positions."""
     conn = get_connection()
     open_rows = conn.execute(
-        "SELECT id, symbol, side, quantity, entry_price FROM positions WHERE status = 'open'"
+        """SELECT id, symbol, side, quantity, entry_price, origin, trailing_peak_price
+           FROM positions WHERE status = 'open'"""
     ).fetchall()
     for row in open_rows:
         price_row = conn.execute(
@@ -61,11 +63,61 @@ def _mark_to_market() -> None:
             unrealized = (current_price - entry_price) * qty
         else:
             unrealized = (entry_price - current_price) * qty
+
+        # Advance trailing peak for gem positions.
+        new_peak = row["trailing_peak_price"]
+        if new_peak is not None:
+            new_peak = max(float(new_peak), current_price)
+
         conn.execute(
-            "UPDATE positions SET current_price = ?, unrealized_pnl = ? WHERE id = ?",
-            (current_price, unrealized, int(row["id"])),
+            """UPDATE positions
+               SET current_price = ?, unrealized_pnl = ?, trailing_peak_price = ?
+               WHERE id = ?""",
+            (current_price, unrealized, new_peak, int(row["id"])),
         )
     conn.commit()
+
+
+def _check_trailing_stops(executor: OrderExecutor) -> list[order_executor.OrderResult]:
+    """Close gem positions that have breached their trailing stop.
+
+    Called after _mark_to_market() so current_price and trailing_peak_price
+    are up to date.  Drawdown gate and position cap are enforced separately and
+    are NOT bypassed here — trailing stop is an additional exit rule, not a
+    replacement for the hard limits.
+    """
+    if config.GEM_TRAILING_STOP_PCT <= 0.0:
+        return []
+
+    conn = get_connection()
+    gem_positions = conn.execute(
+        """
+        SELECT id, symbol, current_price, trailing_peak_price
+        FROM positions
+        WHERE status = 'open'
+          AND origin IN ('gem', 'dex_boosted')
+          AND trailing_peak_price IS NOT NULL
+        """
+    ).fetchall()
+
+    closed: list[order_executor.OrderResult] = []
+    for pos in gem_positions:
+        peak = float(pos["trailing_peak_price"])
+        stop_price = peak * (1.0 - config.GEM_TRAILING_STOP_PCT)
+        current = float(pos["current_price"])
+        if current <= stop_price:
+            _log.warning(
+                "trailing stop triggered: %s current=%.4f stop=%.4f (peak=%.4f -%.1f%%)",
+                pos["symbol"],
+                current,
+                stop_price,
+                peak,
+                config.GEM_TRAILING_STOP_PCT * 100,
+            )
+            result = executor.force_close(pos["symbol"])
+            if result is not None:
+                closed.append(result)
+    return closed
 
 
 def _current_equity() -> float:
@@ -173,20 +225,28 @@ def _run_cycle(rm: RiskManager) -> None:
             _log.error("sentiment pipeline failed — continuing without sentiment: %s", exc)
 
     # 5. Aggregate signals (blends in sentiment from SQLite) for selected symbols
+    #    Origins are stamped so the executor can apply gem-specific risk rules.
     _log.info("aggregating signals")
     aggregated = signal_aggregator.aggregate_once(
         crypto_symbols=sel_crypto,
         stock_symbols=sel_stocks,
+        origins=crypto_origins,
     )
 
-    # 6. Mark open positions to market, then compute equity
+    # 6. Mark open positions to market (also advances trailing_peak_price for gems),
+    #    then check trailing stops before executing new signals.
     _mark_to_market()
+    _executor = OrderExecutor()
+    trailing_closed = _check_trailing_stops(_executor)
+    if trailing_closed:
+        _log.info("trailing stops closed %d position(s)", len(trailing_closed))
+
     is_paper = not (config.CRYPTO_LIVE or config.STOCKS_LIVE)
     equity = _current_equity()
 
     # 7. Execute orders
     _log.info("executing orders (equity=%.2f, paper=%s)", equity, is_paper)
-    crypto_results = order_executor.execute_once(aggregated, equity)
+    crypto_results = order_executor.execute_once(aggregated, equity, executor=_executor)
     stocks_results = stocks_executor.execute_stocks_once(aggregated, equity)
 
     placed = len(crypto_results) + len(stocks_results)

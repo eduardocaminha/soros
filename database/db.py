@@ -74,6 +74,14 @@ class Database:
             conn.execute("ALTER TABLE screener_runs ADD COLUMN origin TEXT NOT NULL DEFAULT ''")
             conn.commit()
 
+        positions_cols = {row[1] for row in conn.execute("PRAGMA table_info(positions)")}
+        if "origin" not in positions_cols:
+            conn.execute("ALTER TABLE positions ADD COLUMN origin TEXT NOT NULL DEFAULT ''")
+            conn.commit()
+        if "trailing_peak_price" not in positions_cols:
+            conn.execute("ALTER TABLE positions ADD COLUMN trailing_peak_price REAL")
+            conn.commit()
+
 
 # Module-level singleton; components call get_connection() instead of
 # instantiating Database directly.

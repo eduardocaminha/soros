@@ -71,19 +71,21 @@ CREATE INDEX IF NOT EXISTS ix_sentiment_symbol_ts
 -- Open and closed positions
 -- ─────────────────────────────────────────────
 CREATE TABLE IF NOT EXISTS positions (
-    id              INTEGER PRIMARY KEY AUTOINCREMENT,
-    symbol          TEXT    NOT NULL,
-    asset_class     TEXT    NOT NULL CHECK (asset_class IN ('crypto', 'stocks')),
-    side            TEXT    NOT NULL CHECK (side IN ('long', 'short')),
-    quantity        REAL    NOT NULL,
-    entry_price     REAL    NOT NULL,
-    current_price   REAL    NOT NULL,
-    unrealized_pnl  REAL    NOT NULL DEFAULT 0.0,
-    realized_pnl    REAL    NOT NULL DEFAULT 0.0,
-    is_paper        INTEGER NOT NULL DEFAULT 1 CHECK (is_paper IN (0, 1)),
-    status          TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
-    opened_at       INTEGER NOT NULL DEFAULT (unixepoch()),
-    closed_at       INTEGER
+    id                  INTEGER PRIMARY KEY AUTOINCREMENT,
+    symbol              TEXT    NOT NULL,
+    asset_class         TEXT    NOT NULL CHECK (asset_class IN ('crypto', 'stocks')),
+    side                TEXT    NOT NULL CHECK (side IN ('long', 'short')),
+    quantity            REAL    NOT NULL,
+    entry_price         REAL    NOT NULL,
+    current_price       REAL    NOT NULL,
+    unrealized_pnl      REAL    NOT NULL DEFAULT 0.0,
+    realized_pnl        REAL    NOT NULL DEFAULT 0.0,
+    is_paper            INTEGER NOT NULL DEFAULT 1 CHECK (is_paper IN (0, 1)),
+    status              TEXT    NOT NULL DEFAULT 'open' CHECK (status IN ('open', 'closed')),
+    origin              TEXT    NOT NULL DEFAULT '',    -- 'base' | 'gem' | 'dex_boosted' | ''
+    trailing_peak_price REAL,                          -- NULL for non-gem positions
+    opened_at           INTEGER NOT NULL DEFAULT (unixepoch()),
+    closed_at           INTEGER
 );
 
 CREATE INDEX IF NOT EXISTS ix_positions_symbol_status
