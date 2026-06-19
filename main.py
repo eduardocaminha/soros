@@ -22,7 +22,7 @@ import time
 import config
 from data import collector as crypto_collector
 from data import stocks_collector
-from data import universe as crypto_universe
+from data.assembler import assemble_universe
 from database.db import get_connection, get_logger
 from engine import order_executor, signal_aggregator, stocks_executor
 from engine.risk_manager import RiskManager
@@ -89,34 +89,58 @@ def _run_cycle(rm: RiskManager) -> None:
     cycle_start = time.time()
     _log.info("=== cycle start ===")
 
-    # 0. Build the autonomous crypto universe (cached; refreshed per MARKETCAP_REFRESH_SECS).
-    #    CRYPTO_SYMBOLS is an optional override — merged in alongside the market-cap base.
-    base_universe = crypto_universe.get_base_universe()
-    override = config.CRYPTO_SYMBOLS
-    # Union preserving market-cap order, with overrides appended if not already present.
-    crypto_universe_symbols: list[str] = list(
-        dict.fromkeys(base_universe + override)
-    )
-    if not crypto_universe_symbols:
+    # 0. Build the autonomous crypto universe.
+    #    When SCREENER_ENABLED=True: assembles market-cap base ∪ gem candidates
+    #    (with DEX boost) and passes the full combined universe to the screener.
+    #    When SCREENER_ENABLED=False: only the market-cap base is used as the
+    #    candidate pool (gem scanner is skipped to avoid unnecessary API calls).
+    #    CRYPTO_SYMBOLS is always an optional pinned override — these symbols are
+    #    always operated regardless of screener output.
+    if config.SCREENER_ENABLED:
+        # Full universe assembler: market-cap base ∪ gem candidates (with DEX boost).
+        # CRYPTO_SYMBOLS override goes to crypto_pinned (always operated).
+        # The assembled watchlist is screened by volume floor + conviction → top-N.
+        assembled = assemble_universe()
+        crypto_pinned_override = list(config.CRYPTO_SYMBOLS)
+        crypto_watchlist = assembled.all_symbols
+        crypto_origins = assembled.origins
+    else:
+        # Legacy / no-screener mode: market-cap base is treated as the pinned universe
+        # (no volume/conviction screening, all base symbols are operated).
+        # CRYPTO_SYMBOLS override is merged in as additional pinned symbols.
+        from data.universe import get_base_universe
+        base_only = get_base_universe()
+        crypto_pinned_override = list(dict.fromkeys(base_only + config.CRYPTO_SYMBOLS))
+        crypto_watchlist = []
+        crypto_origins = {sym: "base" for sym in crypto_pinned_override}
+
+    if not crypto_pinned_override and not crypto_watchlist:
         _log.warning("crypto universe is empty (CoinGecko unavailable and no CRYPTO_SYMBOLS set)")
 
     _log.info(
-        "crypto universe: %d symbols (base=%d override=%d)",
-        len(crypto_universe_symbols),
-        len(base_universe),
-        len(override),
+        "crypto universe: pinned=%d watchlist=%d screener=%s",
+        len(crypto_pinned_override),
+        len(crypto_watchlist),
+        config.SCREENER_ENABLED,
     )
 
-    # 1. Collect price data for the full universe (base ∪ override ∪ watchlist)
+    # 1. Collect price data for the full universe (pinned ∪ watchlist)
+    collect_symbols = list(dict.fromkeys(crypto_pinned_override + crypto_watchlist))
     _log.info("collecting crypto OHLCV")
-    crypto_collector.collect_once(symbols=crypto_universe_symbols)
+    crypto_collector.collect_once(symbols=collect_symbols)
 
     _log.info("collecting stocks OHLCV")
     stocks_collector.collect_once()
 
     # 2. Screen the universe — select symbols to operate this cycle.
-    #    When SCREENER_ENABLED=False (default), returns pinned only.
-    screener_result = screen(crypto_pinned=crypto_universe_symbols)
+    #    When SCREENER_ENABLED=True: watchlist (base ∪ gems) screened by
+    #    volume floor + conviction, top-N ≤ MAX_OPEN_POSITIONS.
+    #    When SCREENER_ENABLED=False: all pinned symbols are operated; watchlist empty.
+    screener_result = screen(
+        crypto_pinned=crypto_pinned_override,
+        crypto_watchlist=crypto_watchlist,
+        crypto_origins=crypto_origins,
+    )
     save_screener_result(screener_result)
     sel_crypto = screener_result.selected_crypto
     sel_stocks = screener_result.selected_stocks

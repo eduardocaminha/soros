@@ -12,6 +12,12 @@ When SCREENER_ENABLED=True:
   5. Always include pinned symbols; select at most SCREENER_TOP_N candidates from
      watchlist-only symbols; total candidates per class capped at MAX_OPEN_POSITIONS.
 
+Origin tagging (populated by universe assembler, forwarded to dashboard):
+  'base'        — from CoinGecko market-cap tier
+  'gem'         — from ignition scanner (volume surge + ROC)
+  'dex_boosted' — gem with DEX trending signal applied
+  ''            — unknown / not tagged (legacy calls)
+
 Usage::
 
     from engine.screener import screen, ScreenerResult
@@ -54,6 +60,7 @@ class ScreenerEntry:
     conviction: float       # abs(composite_score)
     selected: bool
     reason: str             # 'pinned' | 'screener' | 'volume_floor' | 'sentiment_gate' | 'not_ranked'
+    origin: str = ""        # 'base' | 'gem' | 'dex_boosted' | '' (legacy)
 
 
 @dataclass
@@ -122,12 +129,20 @@ def _screen_class(
     pinned: list[str],
     watchlist: list[str],
     asset_class: str,
+    origins: dict[str, str] | None = None,
 ) -> tuple[list[str], list[ScreenerEntry]]:
     """Screen one asset class and return (selected_symbols, entries).
 
     Pinned symbols are always selected.  Watchlist-only symbols go through
     the volume floor + sentiment gate + conviction ranking.
+
+    Parameters
+    ----------
+    origins:
+        Optional map of symbol → origin tag ('base' | 'gem' | 'dex_boosted').
+        When provided, the tag is stored on each ScreenerEntry for dashboard use.
     """
+    _origins: dict[str, str] = origins or {}
     entries: list[ScreenerEntry] = []
     pinned_set = set(pinned)
     selected: list[str] = list(pinned)
@@ -146,6 +161,7 @@ def _screen_class(
             conviction=abs(comp),
             selected=True,
             reason="pinned",
+            origin=_origins.get(sym, ""),
         ))
 
     if not config.SCREENER_ENABLED:
@@ -163,24 +179,25 @@ def _screen_class(
         conv = abs(comp)
 
         if vol < config.SCREENER_MIN_VOLUME_USD:
-            reason = "volume_floor"
             entry = ScreenerEntry(
                 symbol=sym, asset_class=asset_class, is_pinned=False,
                 volume_usd_24h=vol, composite_score=comp, sentiment_score=sent,
-                conviction=conv, selected=False, reason=reason,
+                conviction=conv, selected=False, reason="volume_floor",
+                origin=_origins.get(sym, ""),
             )
         elif sent < _SENTIMENT_GATE:
-            reason = "sentiment_gate"
             entry = ScreenerEntry(
                 symbol=sym, asset_class=asset_class, is_pinned=False,
                 volume_usd_24h=vol, composite_score=comp, sentiment_score=sent,
-                conviction=conv, selected=False, reason=reason,
+                conviction=conv, selected=False, reason="sentiment_gate",
+                origin=_origins.get(sym, ""),
             )
         else:
             entry = ScreenerEntry(
                 symbol=sym, asset_class=asset_class, is_pinned=False,
                 volume_usd_24h=vol, composite_score=comp, sentiment_score=sent,
                 conviction=conv, selected=False, reason="not_ranked",
+                origin=_origins.get(sym, ""),
             )
             candidates.append(entry)
 
@@ -219,6 +236,8 @@ def screen(
     crypto_watchlist: list[str] | None = None,
     stock_pinned: list[str] | None = None,
     stock_watchlist: list[str] | None = None,
+    crypto_origins: dict[str, str] | None = None,
+    stock_origins: dict[str, str] | None = None,
 ) -> ScreenerResult:
     """Select symbols to operate this cycle.
 
@@ -234,6 +253,11 @@ def screen(
     stock_watchlist:
         Candidate stock symbols for screener selection.  Defaults to
         ``config.STOCK_WATCHLIST``.
+    crypto_origins:
+        Optional map of crypto symbol → origin tag ('base' | 'gem' | 'dex_boosted').
+        Populated by the universe assembler; stored in ScreenerEntry.origin.
+    stock_origins:
+        Optional map of stock symbol → origin tag.  Typically unused.
 
     Returns
     -------
@@ -250,8 +274,12 @@ def screen(
     if stock_watchlist is None:
         stock_watchlist = list(config.STOCK_WATCHLIST)
 
-    sel_crypto, entries_crypto = _screen_class(crypto_pinned, crypto_watchlist, "crypto")
-    sel_stocks, entries_stocks = _screen_class(stock_pinned, stock_watchlist, "stocks")
+    sel_crypto, entries_crypto = _screen_class(
+        crypto_pinned, crypto_watchlist, "crypto", origins=crypto_origins
+    )
+    sel_stocks, entries_stocks = _screen_class(
+        stock_pinned, stock_watchlist, "stocks", origins=stock_origins
+    )
 
     return ScreenerResult(
         selected_crypto=sel_crypto,
@@ -270,8 +298,8 @@ def save_screener_result(result: ScreenerResult) -> None:
         """
         INSERT INTO screener_runs
             (run_ts, symbol, asset_class, is_pinned, volume_usd_24h,
-             composite_score, sentiment_score, conviction, selected, reason)
-        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+             composite_score, sentiment_score, conviction, selected, reason, origin)
+        VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
         """,
         [
             (
@@ -285,6 +313,7 @@ def save_screener_result(result: ScreenerResult) -> None:
                 e.conviction,
                 1 if e.selected else 0,
                 e.reason,
+                e.origin,
             )
             for e in result.entries
         ],

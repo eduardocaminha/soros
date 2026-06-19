@@ -565,3 +565,95 @@ class TestSaveScreenerResult:
         assert abs(row[3] - (-0.5)) < 1e-6
         assert abs(row[4] - 2_000_000.0) < 1e-3
         assert abs(row[5] - 0.6) < 1e-6
+
+    def test_origin_stored_correctly(self, temp_db):
+        entry = ScreenerEntry(
+            symbol="GEM/USDT",
+            asset_class="crypto",
+            is_pinned=False,
+            volume_usd_24h=500_000.0,
+            composite_score=0.6,
+            sentiment_score=0.0,
+            conviction=0.6,
+            selected=True,
+            reason="screener",
+            origin="gem",
+        )
+        save_screener_result(ScreenerResult(
+            selected_crypto=["GEM/USDT"], selected_stocks=[], entries=[entry],
+        ))
+        conn = sqlite3.connect(temp_db)
+        row = conn.execute("SELECT origin FROM screener_runs WHERE symbol = 'GEM/USDT'").fetchone()
+        conn.close()
+        assert row[0] == "gem"
+
+    def test_origin_defaults_to_empty_string(self, temp_db):
+        entry = self._make_entry("BTC/USDT")  # no origin kwarg
+        save_screener_result(ScreenerResult(
+            selected_crypto=["BTC/USDT"], selected_stocks=[], entries=[entry],
+        ))
+        conn = sqlite3.connect(temp_db)
+        row = conn.execute("SELECT origin FROM screener_runs WHERE symbol = 'BTC/USDT'").fetchone()
+        conn.close()
+        assert row[0] == ""
+
+
+# ---------------------------------------------------------------------------
+# Origin propagation through screen()
+# ---------------------------------------------------------------------------
+
+class TestScreenOrigins:
+    def test_pinned_entry_carries_origin(self, monkeypatch):
+        monkeypatch.setattr(config, "SCREENER_ENABLED", False)
+        result = screen(
+            crypto_pinned=["BTC/USDT"],
+            crypto_watchlist=[],
+            stock_pinned=[],
+            stock_watchlist=[],
+            crypto_origins={"BTC/USDT": "base"},
+        )
+        entry = next(e for e in result.entries if e.symbol == "BTC/USDT")
+        assert entry.origin == "base"
+
+    def test_watchlist_entry_carries_gem_origin(self, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "SCREENER_ENABLED", True)
+        monkeypatch.setattr(config, "SCREENER_MIN_VOLUME_USD", 1_000.0)
+        monkeypatch.setattr(config, "SCREENER_TOP_N", 3)
+        _insert_prices(temp_db, "GEM/USDT", "crypto", close=10.0, volume=10_000.0)
+        _insert_signal(temp_db, "GEM/USDT", "crypto", composite=0.7)
+        result = screen(
+            crypto_pinned=[],
+            crypto_watchlist=["GEM/USDT"],
+            stock_pinned=[],
+            stock_watchlist=[],
+            crypto_origins={"GEM/USDT": "gem"},
+        )
+        entry = next(e for e in result.entries if e.symbol == "GEM/USDT")
+        assert entry.origin == "gem"
+
+    def test_dex_boosted_origin_propagated(self, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "SCREENER_ENABLED", True)
+        monkeypatch.setattr(config, "SCREENER_MIN_VOLUME_USD", 1_000.0)
+        monkeypatch.setattr(config, "SCREENER_TOP_N", 3)
+        _insert_prices(temp_db, "DEX/USDT", "crypto", close=5.0, volume=100_000.0)
+        _insert_signal(temp_db, "DEX/USDT", "crypto", composite=0.8)
+        result = screen(
+            crypto_pinned=[],
+            crypto_watchlist=["DEX/USDT"],
+            stock_pinned=[],
+            stock_watchlist=[],
+            crypto_origins={"DEX/USDT": "dex_boosted"},
+        )
+        entry = next(e for e in result.entries if e.symbol == "DEX/USDT")
+        assert entry.origin == "dex_boosted"
+
+    def test_no_origins_passed_defaults_to_empty_string(self, monkeypatch):
+        monkeypatch.setattr(config, "SCREENER_ENABLED", False)
+        result = screen(
+            crypto_pinned=["BTC/USDT"],
+            crypto_watchlist=[],
+            stock_pinned=[],
+            stock_watchlist=[],
+        )
+        entry = next(e for e in result.entries if e.symbol == "BTC/USDT")
+        assert entry.origin == ""
