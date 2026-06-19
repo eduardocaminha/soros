@@ -9,7 +9,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from sentiment.runner import SentimentRecord, _score_to_label, run
+from sentiment.runner import SentimentRecord, _analyse_symbol, _score_to_label, run
 
 
 # ---------------------------------------------------------------------------
@@ -268,3 +268,115 @@ class TestRun:
         )
         run(crypto_symbols=["BTC/USDT"], stock_symbols=[])
         assert len(created) == 1
+
+
+# ---------------------------------------------------------------------------
+# _analyse_symbol — verifies pre-scored base pass (no LLM) + debate on divergence
+# ---------------------------------------------------------------------------
+
+def _fake_crypto_sources(symbol: str = "BTC/USDT"):
+    from sentiment.sources_crypto import CryptoSources
+    return CryptoSources(symbol=symbol, fetched_at=int(time.time()), fear_greed_value=60)
+
+
+def _fake_stock_sources(symbol: str = "AAPL"):
+    from sentiment.sources_stocks import StockSources
+    return StockSources(symbol=symbol, fetched_at=int(time.time()), fear_greed_value=60)
+
+
+class TestAnalyseSymbol:
+    def test_crypto_no_llm_when_aligned(self, monkeypatch):
+        """Base pass uses pre_score; no LLM call when quant and sentiment agree."""
+        monkeypatch.setattr("sentiment.runner.sources_crypto.fetch",
+                            lambda *a, **kw: _fake_crypto_sources())
+        monkeypatch.setattr("sentiment.runner.sources_crypto.pre_score",
+                            lambda s: 0.5)
+        monkeypatch.setattr("sentiment.runner.sources_crypto.to_prompt_text",
+                            lambda s: "context")
+        client = MagicMock()
+        result = _analyse_symbol("BTC/USDT", "crypto", client, det_score=0.4)
+        client.query.assert_not_called()
+        assert result.score == pytest.approx(0.5)
+        assert result.debated is False
+
+    def test_crypto_debate_triggered_on_divergence(self, monkeypatch):
+        """Debate (LLM call) fires when pre_score sign opposes deterministic score."""
+        monkeypatch.setattr("sentiment.runner.sources_crypto.fetch",
+                            lambda *a, **kw: _fake_crypto_sources())
+        monkeypatch.setattr("sentiment.runner.sources_crypto.pre_score",
+                            lambda s: 0.5)
+        monkeypatch.setattr("sentiment.runner.sources_crypto.to_prompt_text",
+                            lambda s: "context")
+        client = MagicMock()
+        client.query.return_value = '{"score": 0.1, "rationale": "mixed"}'
+        result = _analyse_symbol("BTC/USDT", "crypto", client, det_score=-0.4)
+        client.query.assert_called_once()
+        assert result.debated is True
+
+    def test_stocks_no_llm_when_aligned(self, monkeypatch):
+        """Stock base pass uses pre_score; no LLM call when signals agree."""
+        monkeypatch.setattr("sentiment.runner.sources_stocks.fetch",
+                            lambda *a, **kw: _fake_stock_sources())
+        monkeypatch.setattr("sentiment.runner.sources_stocks.pre_score",
+                            lambda s: -0.4)
+        monkeypatch.setattr("sentiment.runner.sources_stocks.to_prompt_text",
+                            lambda s: "context")
+        client = MagicMock()
+        result = _analyse_symbol("AAPL", "stocks", client, det_score=-0.6)
+        client.query.assert_not_called()
+        assert result.score == pytest.approx(-0.4)
+        assert result.debated is False
+
+    def test_crypto_api_key_passed_to_fetch(self, monkeypatch):
+        """CRYPTOPANIC_API_KEY from config is forwarded to sources_crypto.fetch."""
+        import config as cfg
+        monkeypatch.setattr(cfg, "CRYPTOPANIC_API_KEY", "test-key-123")
+        received: list[str] = []
+
+        def fake_fetch(symbol, *, cryptopanic_api_key=""):
+            received.append(cryptopanic_api_key)
+            return _fake_crypto_sources(symbol)
+
+        monkeypatch.setattr("sentiment.runner.sources_crypto.fetch", fake_fetch)
+        monkeypatch.setattr("sentiment.runner.sources_crypto.pre_score", lambda s: 0.3)
+        monkeypatch.setattr("sentiment.runner.sources_crypto.to_prompt_text", lambda s: "")
+        _analyse_symbol("BTC/USDT", "crypto", MagicMock(), det_score=0.3)
+        assert received == ["test-key-123"]
+
+    def test_stocks_api_key_passed_to_fetch(self, monkeypatch):
+        """FINNHUB_API_KEY from config is forwarded to sources_stocks.fetch."""
+        import config as cfg
+        monkeypatch.setattr(cfg, "FINNHUB_API_KEY", "fh-key-456")
+        received: list[str] = []
+
+        def fake_fetch(symbol, *, finnhub_api_key=""):
+            received.append(finnhub_api_key)
+            return _fake_stock_sources(symbol)
+
+        monkeypatch.setattr("sentiment.runner.sources_stocks.fetch", fake_fetch)
+        # Use -0.6 so |pre_score| >= LOW_CONVICTION_THRESHOLD (0.25); aligned with det_score → no debate
+        monkeypatch.setattr("sentiment.runner.sources_stocks.pre_score", lambda s: -0.6)
+        monkeypatch.setattr("sentiment.runner.sources_stocks.to_prompt_text", lambda s: "")
+        _analyse_symbol("AAPL", "stocks", MagicMock(), det_score=-0.6)
+        assert received == ["fh-key-456"]
+
+    def test_base_result_llm_used_is_false(self, monkeypatch):
+        """AnalystResult passed to debate always has llm_used=False (no LLM on base)."""
+        received_results: list = []
+
+        monkeypatch.setattr("sentiment.runner.sources_crypto.fetch",
+                            lambda *a, **kw: _fake_crypto_sources())
+        monkeypatch.setattr("sentiment.runner.sources_crypto.pre_score", lambda s: 0.6)
+        monkeypatch.setattr("sentiment.runner.sources_crypto.to_prompt_text", lambda s: "ctx")
+
+        original_debate = __import__("sentiment.debate", fromlist=["debate"]).debate
+
+        def capturing_debate(sources_text, analyst_result, det_score, client):
+            received_results.append(analyst_result)
+            return original_debate(sources_text, analyst_result, det_score, client)
+
+        monkeypatch.setattr("sentiment.runner.debate.debate", capturing_debate)
+        _analyse_symbol("BTC/USDT", "crypto", MagicMock(), det_score=0.5)
+        assert len(received_results) == 1
+        assert received_results[0].llm_used is False
+        assert received_results[0].score == pytest.approx(0.6)
