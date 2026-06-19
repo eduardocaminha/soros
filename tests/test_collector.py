@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 import sqlite3
 from pathlib import Path
 from unittest.mock import MagicMock, call, patch
@@ -9,12 +10,23 @@ from unittest.mock import MagicMock, call, patch
 import pytest
 
 import config
+import data.collector as collector_module
 from data.collector import _upsert_candles, collect_once
 
 
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture(autouse=True)
+def reset_perp_cache():
+    """Clear the module-level perp-symbol cache between tests."""
+    collector_module._perp_symbols_cache = None
+    collector_module._perp_cache_ts = 0.0
+    yield
+    collector_module._perp_symbols_cache = None
+    collector_module._perp_cache_ts = 0.0
 
 
 class _FakeDB:
@@ -58,9 +70,25 @@ def _make_spot(candles_per_call: int = 5) -> MagicMock:
     return mock
 
 
-def _make_futures() -> MagicMock:
+def _make_perp_markets(*spot_symbols: str) -> dict:
+    """Build a ccxt-style markets dict for the given spot symbols (all as USDT-M swaps)."""
+    markets = {}
+    for sym in spot_symbols:
+        base = sym.split("/")[0]
+        markets[f"{base}/USDT:USDT"] = {
+            "base": base,
+            "quote": "USDT",
+            "settle": "USDT",
+            "swap": True,
+        }
+    return markets
+
+
+def _make_futures(perp_symbols: list[str] | None = None) -> MagicMock:
     mock = MagicMock()
     mock.fetch_funding_rate.return_value = {"fundingRate": 0.0001}
+    _syms = perp_symbols if perp_symbols is not None else ["BTC/USDT", "ETH/USDT", "XRP/USDT"]
+    mock.load_markets.return_value = _make_perp_markets(*_syms)
     return mock
 
 
@@ -225,3 +253,84 @@ class TestCollectOnce:
         ):
             results = collect_once()
         assert results["BTC/USDT"] == 3
+
+
+# ---------------------------------------------------------------------------
+# Perp-symbol cache + no-perp silent skip
+# ---------------------------------------------------------------------------
+
+
+class TestFundingRateNoPerp:
+    def test_no_warning_for_symbol_without_perp(self, temp_db, caplog):
+        """Symbols not in the perp set must not log a WARNING."""
+        # MATIC has no perp listed; BTC does
+        futures = _make_futures(perp_symbols=["BTC/USDT"])
+        spot = _make_spot()
+        with (
+            patch("data.collector._make_exchange", side_effect=[spot, futures]),
+            patch.object(config, "CRYPTO_SYMBOLS", ["BTC/USDT", "MATIC/USDT"]),
+            patch.object(config, "CRYPTO_WATCHLIST", []),
+            caplog.at_level(logging.WARNING, logger="data.collector"),
+        ):
+            collect_once()
+        warning_texts = [r.getMessage() for r in caplog.records if r.levelno >= logging.WARNING]
+        assert not any("MATIC/USDT" in t for t in warning_texts)
+
+    def test_no_perp_symbol_gets_null_funding_rate(self, temp_db):
+        """Symbols without a perp must be stored with funding_rate=None."""
+        futures = _make_futures(perp_symbols=["BTC/USDT"])
+        spot = _make_spot()
+        with (
+            patch("data.collector._make_exchange", side_effect=[spot, futures]),
+            patch.object(config, "CRYPTO_SYMBOLS", ["MATIC/USDT"]),
+            patch.object(config, "CRYPTO_WATCHLIST", []),
+        ):
+            collect_once()
+        conn = sqlite3.connect(temp_db)
+        row = conn.execute(
+            "SELECT funding_rate FROM prices WHERE symbol = 'MATIC/USDT' LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert row[0] is None
+
+    def test_perp_symbol_still_fetches_funding_rate(self, temp_db):
+        """Symbols with a perp continue to receive the real funding rate."""
+        futures = _make_futures(perp_symbols=["BTC/USDT"])
+        spot = _make_spot()
+        with (
+            patch("data.collector._make_exchange", side_effect=[spot, futures]),
+            patch.object(config, "CRYPTO_SYMBOLS", ["BTC/USDT"]),
+            patch.object(config, "CRYPTO_WATCHLIST", []),
+        ):
+            collect_once()
+        conn = sqlite3.connect(temp_db)
+        row = conn.execute(
+            "SELECT funding_rate FROM prices WHERE symbol = 'BTC/USDT' LIMIT 1"
+        ).fetchone()
+        assert row is not None
+        assert row[0] == pytest.approx(0.0001)
+        futures.fetch_funding_rate.assert_called()
+
+    def test_perp_fetch_not_called_for_no_perp_symbol(self, temp_db):
+        """fetch_funding_rate must not be called for a symbol with no perp."""
+        futures = _make_futures(perp_symbols=["BTC/USDT"])
+        spot = _make_spot()
+        with (
+            patch("data.collector._make_exchange", side_effect=[spot, futures]),
+            patch.object(config, "CRYPTO_SYMBOLS", ["MATIC/USDT"]),
+            patch.object(config, "CRYPTO_WATCHLIST", []),
+        ):
+            collect_once()
+        futures.fetch_funding_rate.assert_not_called()
+
+    def test_perp_cache_loaded_once_per_collect(self, temp_db):
+        """load_markets should be called exactly once per collect_once call."""
+        futures = _make_futures()
+        spot = _make_spot()
+        with (
+            patch("data.collector._make_exchange", side_effect=[spot, futures]),
+            patch.object(config, "CRYPTO_SYMBOLS", ["BTC/USDT", "ETH/USDT"]),
+            patch.object(config, "CRYPTO_WATCHLIST", []),
+        ):
+            collect_once()
+        futures.load_markets.assert_called_once()
