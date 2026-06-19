@@ -133,7 +133,9 @@ interface SweepData {
   error?: string;
 }
 
-type TabId = "dashboard" | "settings";
+type TabId = "dashboard" | "alerts" | "settings";
+
+const ALERTS_STORAGE_KEY = "soros_alerts_last_visit";
 
 const SETTING_GROUPS: Array<{ label: string; keys: string[] }> = [
   { label: "Loop", keys: ["LOOP_INTERVAL_SECONDS"] },
@@ -560,16 +562,24 @@ function OrdersTable({ orders }: { orders: Order[] }) {
   );
 }
 
-function EventsTable({ events }: { events: Event[] }) {
-  if (events.length === 0) return null;
+function EventsTable({ events, compact }: { events: Event[]; compact?: boolean }) {
+  if (events.length === 0) {
+    if (compact) return null;
+    return (
+      <Section title="Alertas">
+        <p className="neutral" style={{ padding: "12px 10px" }}>Sem alertas.</p>
+      </Section>
+    );
+  }
+  const rows = compact ? events.slice(0, 5) : events;
   return (
-    <Section title="Alertas">
+    <Section title="Alertas" count={events.length}>
       <table>
         <thead>
           <tr><th>Hora</th><th>Nível</th><th>Componente</th><th>Mensagem</th></tr>
         </thead>
         <tbody>
-          {events.map((e, i) => (
+          {rows.map((e, i) => (
             <tr key={i}>
               <td className="neutral">{ts2str(e.ts)}</td>
               <td>
@@ -584,6 +594,18 @@ function EventsTable({ events }: { events: Event[] }) {
         </tbody>
       </table>
     </Section>
+  );
+}
+
+function AlertsTab({ events }: { events: Event[] }) {
+  return (
+    <div>
+      <div style={{ color: "var(--text-muted)", fontSize: 11, marginBottom: 16 }}>
+        WARNINGs e ERRORs registrados pelo bot.
+        {events.length > 0 && <> · {events.length} alerta{events.length !== 1 ? "s" : ""} no total.</>}
+      </div>
+      <EventsTable events={events} />
+    </div>
   );
 }
 
@@ -1016,6 +1038,10 @@ export default function Dashboard() {
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [activeTab, setActiveTab] = useState<TabId>("dashboard");
+  const [lastAlertsVisit, setLastAlertsVisit] = useState<number>(() => {
+    if (typeof window === "undefined") return 0;
+    return parseInt(localStorage.getItem(ALERTS_STORAGE_KEY) ?? "0", 10);
+  });
 
   const load = useCallback(async () => {
     try {
@@ -1039,6 +1065,19 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [load]);
 
+  const unreadAlerts = data
+    ? data.events.filter((e) => e.ts > lastAlertsVisit).length
+    : 0;
+
+  const handleTabClick = (tab: TabId) => {
+    setActiveTab(tab);
+    if (tab === "alerts") {
+      const now = Math.floor(Date.now() / 1000);
+      localStorage.setItem(ALERTS_STORAGE_KEY, String(now));
+      setLastAlertsVisit(now);
+    }
+  };
+
   const tabBtnStyle = (tab: TabId): React.CSSProperties => ({
     padding: "4px 14px",
     borderRadius: 6,
@@ -1048,6 +1087,7 @@ export default function Dashboard() {
     background: activeTab === tab ? "var(--surface)" : "transparent",
     border: `1px solid ${activeTab === tab ? "var(--border)" : "transparent"}`,
     color: activeTab === tab ? "var(--text)" : "var(--text-muted)",
+    position: "relative",
   });
 
   return (
@@ -1056,8 +1096,24 @@ export default function Dashboard() {
       <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24 }}>
         <h1>Soros</h1>
         <div style={{ display: "flex", gap: 4 }}>
-          <button style={tabBtnStyle("dashboard")} onClick={() => setActiveTab("dashboard")}>Dashboard</button>
-          <button style={tabBtnStyle("settings")} onClick={() => setActiveTab("settings")}>Configurações</button>
+          <button style={tabBtnStyle("dashboard")} onClick={() => handleTabClick("dashboard")}>Dashboard</button>
+          <button style={tabBtnStyle("alerts")} onClick={() => handleTabClick("alerts")}>
+            Alertas
+            {unreadAlerts > 0 && (
+              <span style={{
+                marginLeft: 6,
+                background: "var(--red)",
+                color: "#fff",
+                borderRadius: 8,
+                fontSize: 10,
+                fontWeight: 700,
+                padding: "1px 5px",
+                lineHeight: 1.4,
+                verticalAlign: "middle",
+              }}>{unreadAlerts}</span>
+            )}
+          </button>
+          <button style={tabBtnStyle("settings")} onClick={() => handleTabClick("settings")}>Configurações</button>
         </div>
         <div style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 11 }}>
           {lastUpdate ? <>última atualização: {lastUpdate.toLocaleTimeString("pt-BR")}{" · "}</> : null}
@@ -1073,6 +1129,12 @@ export default function Dashboard() {
 
       {activeTab === "settings" ? (
         <SettingsTab />
+      ) : activeTab === "alerts" ? (
+        !data ? (
+          <p className="neutral">Carregando…</p>
+        ) : (
+          <AlertsTab events={data.events} />
+        )
       ) : !data ? (
         <p className="neutral">Carregando…</p>
       ) : data.empty ? (
@@ -1089,7 +1151,6 @@ export default function Dashboard() {
           <SignalsTable signals={data.signals} />
           <SentimentTable sentiment={data.sentiment} />
           <OrdersTable orders={data.orders} />
-          <EventsTable events={data.events} />
         </>
       )}
     </div>
