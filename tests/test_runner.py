@@ -327,21 +327,19 @@ class TestAnalyseSymbol:
         assert result.score == pytest.approx(-0.4)
         assert result.debated is False
 
-    def test_crypto_api_key_passed_to_fetch(self, monkeypatch):
-        """CRYPTOPANIC_API_KEY from config is forwarded to sources_crypto.fetch."""
-        import config as cfg
-        monkeypatch.setattr(cfg, "CRYPTOPANIC_API_KEY", "test-key-123")
+    def test_crypto_fetch_called_with_symbol(self, monkeypatch):
+        """sources_crypto.fetch is called with the symbol (no API key needed)."""
         received: list[str] = []
 
-        def fake_fetch(symbol, *, cryptopanic_api_key=""):
-            received.append(cryptopanic_api_key)
+        def fake_fetch(symbol):
+            received.append(symbol)
             return _fake_crypto_sources(symbol)
 
         monkeypatch.setattr("sentiment.runner.sources_crypto.fetch", fake_fetch)
         monkeypatch.setattr("sentiment.runner.sources_crypto.pre_score", lambda s: 0.3)
         monkeypatch.setattr("sentiment.runner.sources_crypto.to_prompt_text", lambda s: "")
         _analyse_symbol("BTC/USDT", "crypto", MagicMock(), det_score=0.3)
-        assert received == ["test-key-123"]
+        assert received == ["BTC/USDT"]
 
     def test_stocks_api_key_passed_to_fetch(self, monkeypatch):
         """FINNHUB_API_KEY from config is forwarded to sources_stocks.fetch."""

@@ -157,7 +157,6 @@ class TestWatchlistAndScreener:
             "SCREENER_ENABLED",
             "SCREENER_TOP_N",
             "SCREENER_MIN_VOLUME_USD",
-            "CRYPTOPANIC_API_KEY",
             "FINNHUB_API_KEY",
         ):
             os.environ.pop(key, None)
@@ -214,16 +213,6 @@ class TestWatchlistAndScreener:
         monkeypatch.setenv("SCREENER_MIN_VOLUME_USD", "500000")
         importlib.reload(config)
         assert config.SCREENER_MIN_VOLUME_USD == 500_000.0
-
-    def test_cryptopanic_key_default_empty(self, monkeypatch):
-        monkeypatch.delenv("CRYPTOPANIC_API_KEY", raising=False)
-        importlib.reload(config)
-        assert config.CRYPTOPANIC_API_KEY == ""
-
-    def test_cryptopanic_key_from_env(self, monkeypatch):
-        monkeypatch.setenv("CRYPTOPANIC_API_KEY", "abc123")
-        importlib.reload(config)
-        assert config.CRYPTOPANIC_API_KEY == "abc123"
 
     def test_finnhub_key_default_empty(self, monkeypatch):
         monkeypatch.delenv("FINNHUB_API_KEY", raising=False)

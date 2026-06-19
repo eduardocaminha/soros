@@ -58,14 +58,15 @@ cp .env.example .env
 | `SCREENER_TOP_N` | `3` | Maximo de simbolos da watchlist selecionados pelo screener. |
 | `SCREENER_MIN_VOLUME_USD` | `1000000` | Volume notional 24h minimo (USD) para qualificar. |
 
-### Fontes de sentimento (chaves opcionais)
+### Fontes de sentimento
 
-Sem chave, a fonte e ignorada e o score vira neutro — nunca quebra o ciclo.
+Sentimento cripto e totalmente keyless: Fear & Greed Index (alternative.me) e
+votes de comunidade por moeda (CoinGecko `/coins/{id}`). Sem nenhuma chave
+necessaria para cripto — o sinal sempre funciona.
 
 | Variavel | Default | Descricao |
 |---|---|---|
-| `CRYPTOPANIC_API_KEY` | _(vazio)_ | Habilita scores de sentimento por moeda (cripto) via CryptoPanic. |
-| `FINNHUB_API_KEY` | _(vazio)_ | Habilita scores de sentimento por ticker (acoes) via Finnhub. |
+| `FINNHUB_API_KEY` | _(vazio)_ | Habilita scores de sentimento por ticker (acoes) via Finnhub. Sem chave → score neutro. |
 
 ### Coleta de dados
 

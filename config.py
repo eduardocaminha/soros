@@ -106,7 +106,6 @@ SCREENER_MIN_VOLUME_USD: float = float(
 # Optional sentiment API keys (graceful degradation — absent = neutral score)
 # ---------------------------------------------------------------------------
 
-CRYPTOPANIC_API_KEY: str = os.environ.get("CRYPTOPANIC_API_KEY", "")
 FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "")
 
 # ---------------------------------------------------------------------------

@@ -56,9 +56,7 @@ def _analyse_symbol(
 ) -> DebateResult:
     """Fetch sources, compute pre-score aggregate (no LLM), optionally debate."""
     if asset_class == "crypto":
-        sources = sources_crypto.fetch(
-            symbol, cryptopanic_api_key=config.CRYPTOPANIC_API_KEY
-        )
+        sources = sources_crypto.fetch(symbol)
         base_score = sources_crypto.pre_score(sources)
         sources_text = sources_crypto.to_prompt_text(sources)
     else:

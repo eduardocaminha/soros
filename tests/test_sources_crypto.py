@@ -10,7 +10,7 @@ from sentiment.sources_crypto import (
     CryptoSources,
     _base,
     _fetch_coingecko,
-    _fetch_cryptopanic,
+    _fetch_coingecko_sentiment,
     _fetch_fear_greed,
     _fetch_news,
     fetch,
@@ -120,6 +120,95 @@ class TestFetchCoingecko:
 
 
 # ---------------------------------------------------------------------------
+# _fetch_coingecko_sentiment
+# ---------------------------------------------------------------------------
+
+_COINGECKO_COIN_BULLISH = {
+    "id": "bitcoin",
+    "sentiment_votes_up_percentage": 80.0,
+    "sentiment_votes_down_percentage": 20.0,
+}
+
+_COINGECKO_COIN_BEARISH = {
+    "id": "bitcoin",
+    "sentiment_votes_up_percentage": 20.0,
+    "sentiment_votes_down_percentage": 80.0,
+}
+
+_COINGECKO_COIN_NEUTRAL = {
+    "id": "bitcoin",
+    "sentiment_votes_up_percentage": 50.0,
+    "sentiment_votes_down_percentage": 50.0,
+}
+
+
+class TestFetchCoingeckoSentiment:
+    def test_bullish_votes_give_positive_score(self):
+        with patch("sentiment.sources_crypto._get_json", return_value=_COINGECKO_COIN_BULLISH):
+            score = _fetch_coingecko_sentiment("BTC")
+        # (80 - 50) / 50 = 0.6
+        assert score == pytest.approx(0.6)
+        assert score > 0
+
+    def test_bearish_votes_give_negative_score(self):
+        with patch("sentiment.sources_crypto._get_json", return_value=_COINGECKO_COIN_BEARISH):
+            score = _fetch_coingecko_sentiment("BTC")
+        # (20 - 50) / 50 = -0.6
+        assert score == pytest.approx(-0.6)
+        assert score < 0
+
+    def test_neutral_votes_give_zero(self):
+        with patch("sentiment.sources_crypto._get_json", return_value=_COINGECKO_COIN_NEUTRAL):
+            score = _fetch_coingecko_sentiment("BTC")
+        assert score == pytest.approx(0.0)
+
+    def test_clamps_to_plus_one(self):
+        data = {"sentiment_votes_up_percentage": 100.0}
+        with patch("sentiment.sources_crypto._get_json", return_value=data):
+            score = _fetch_coingecko_sentiment("BTC")
+        assert score == pytest.approx(1.0)
+
+    def test_clamps_to_minus_one(self):
+        data = {"sentiment_votes_up_percentage": 0.0}
+        with patch("sentiment.sources_crypto._get_json", return_value=data):
+            score = _fetch_coingecko_sentiment("BTC")
+        assert score == pytest.approx(-1.0)
+
+    def test_returns_none_on_network_failure(self):
+        with patch("sentiment.sources_crypto._get_json", return_value=None):
+            assert _fetch_coingecko_sentiment("BTC") is None
+
+    def test_returns_none_when_field_absent(self):
+        with patch("sentiment.sources_crypto._get_json", return_value={"id": "bitcoin"}):
+            assert _fetch_coingecko_sentiment("BTC") is None
+
+    def test_uses_coin_id_in_url(self):
+        captured = []
+
+        def fake_get_json(url: str):
+            captured.append(url)
+            return None
+
+        with patch("sentiment.sources_crypto._get_json", side_effect=fake_get_json):
+            _fetch_coingecko_sentiment("BTC")
+
+        assert "bitcoin" in captured[0]
+        assert "/coins/bitcoin" in captured[0]
+
+    def test_lowercases_unknown_symbol(self):
+        captured = []
+
+        def fake_get_json(url: str):
+            captured.append(url)
+            return None
+
+        with patch("sentiment.sources_crypto._get_json", side_effect=fake_get_json):
+            _fetch_coingecko_sentiment("PEPE")
+
+        assert "pepe" in captured[0]
+
+
+# ---------------------------------------------------------------------------
 # _fetch_news
 # ---------------------------------------------------------------------------
 
@@ -156,78 +245,6 @@ class TestFetchNews:
 
 
 # ---------------------------------------------------------------------------
-# _fetch_cryptopanic
-# ---------------------------------------------------------------------------
-
-_CRYPTOPANIC_BULLISH = {
-    "results": [
-        {"votes": {"positive": 10, "negative": 2}},
-        {"votes": {"positive": 6, "negative": 1}},
-    ]
-}
-
-_CRYPTOPANIC_BEARISH = {
-    "results": [
-        {"votes": {"positive": 1, "negative": 8}},
-    ]
-}
-
-
-class TestFetchCryptopanic:
-    def test_returns_positive_score_on_bullish_votes(self):
-        with patch("sentiment.sources_crypto._get_json", return_value=_CRYPTOPANIC_BULLISH):
-            score = _fetch_cryptopanic("BTC", "testkey")
-        # total_pos=16, total_neg=3 → (16-3)/19 ≈ 0.684
-        assert score == pytest.approx((16 - 3) / 19, rel=0.01)
-        assert score > 0
-
-    def test_returns_negative_score_on_bearish_votes(self):
-        with patch("sentiment.sources_crypto._get_json", return_value=_CRYPTOPANIC_BEARISH):
-            score = _fetch_cryptopanic("BTC", "testkey")
-        # (1-8)/9 ≈ -0.778
-        assert score == pytest.approx((1 - 8) / 9, rel=0.01)
-        assert score < 0
-
-    def test_returns_none_on_network_failure(self):
-        with patch("sentiment.sources_crypto._get_json", return_value=None):
-            assert _fetch_cryptopanic("BTC", "testkey") is None
-
-    def test_returns_none_on_empty_results(self):
-        with patch("sentiment.sources_crypto._get_json", return_value={"results": []}):
-            assert _fetch_cryptopanic("BTC", "testkey") is None
-
-    def test_returns_none_when_all_votes_zero(self):
-        data = {"results": [{"votes": {"positive": 0, "negative": 0}}]}
-        with patch("sentiment.sources_crypto._get_json", return_value=data):
-            assert _fetch_cryptopanic("BTC", "testkey") is None
-
-    def test_clamps_to_minus_one(self):
-        data = {"results": [{"votes": {"positive": 0, "negative": 100}}]}
-        with patch("sentiment.sources_crypto._get_json", return_value=data):
-            score = _fetch_cryptopanic("BTC", "testkey")
-        assert score == pytest.approx(-1.0)
-
-    def test_clamps_to_plus_one(self):
-        data = {"results": [{"votes": {"positive": 100, "negative": 0}}]}
-        with patch("sentiment.sources_crypto._get_json", return_value=data):
-            score = _fetch_cryptopanic("BTC", "testkey")
-        assert score == pytest.approx(1.0)
-
-    def test_includes_api_key_in_url(self):
-        captured = []
-
-        def fake_get_json(url: str):
-            captured.append(url)
-            return {"results": []}
-
-        with patch("sentiment.sources_crypto._get_json", side_effect=fake_get_json):
-            _fetch_cryptopanic("BTC", "mykey123")
-
-        assert "mykey123" in captured[0]
-        assert "BTC" in captured[0]
-
-
-# ---------------------------------------------------------------------------
 # fetch (integration of all sources)
 # ---------------------------------------------------------------------------
 
@@ -237,6 +254,7 @@ class TestFetch:
             patch("sentiment.sources_crypto._fetch_fear_greed", return_value=(60, "Greed")),
             patch("sentiment.sources_crypto._fetch_coingecko", return_value=(1.5, -2.0, 1)),
             patch("sentiment.sources_crypto._fetch_news", return_value=["Headline A"]),
+            patch("sentiment.sources_crypto._fetch_coingecko_sentiment", return_value=0.4),
         ):
             result = fetch("BTC/USDT")
 
@@ -248,6 +266,7 @@ class TestFetch:
         assert result.price_change_7d_pct == pytest.approx(-2.0)
         assert result.market_cap_rank == 1
         assert result.news_headlines == ["Headline A"]
+        assert result.coingecko_sentiment_score == pytest.approx(0.4)
         assert result.fetched_at > 0
 
     def test_partial_failure_still_returns_object(self):
@@ -255,6 +274,7 @@ class TestFetch:
             patch("sentiment.sources_crypto._fetch_fear_greed", return_value=(None, None)),
             patch("sentiment.sources_crypto._fetch_coingecko", return_value=(None, None, None)),
             patch("sentiment.sources_crypto._fetch_news", return_value=[]),
+            patch("sentiment.sources_crypto._fetch_coingecko_sentiment", return_value=None),
         ):
             result = fetch("ETH/USDT")
 
@@ -262,41 +282,33 @@ class TestFetch:
         assert result.symbol == "ETH/USDT"
         assert result.fear_greed_value is None
         assert result.news_headlines == []
+        assert result.coingecko_sentiment_score is None
 
-    def test_cryptopanic_not_called_without_key(self):
+    def test_sentiment_failure_leaves_score_none(self):
         with (
             patch("sentiment.sources_crypto._fetch_fear_greed", return_value=(50, "Neutral")),
             patch("sentiment.sources_crypto._fetch_coingecko", return_value=(0.0, 0.0, 5)),
             patch("sentiment.sources_crypto._fetch_news", return_value=[]),
-            patch("sentiment.sources_crypto._fetch_cryptopanic") as mock_cp,
+            patch("sentiment.sources_crypto._fetch_coingecko_sentiment", return_value=None),
         ):
             result = fetch("BTC/USDT")
 
-        mock_cp.assert_not_called()
-        assert result.cryptopanic_score is None
+        assert result.coingecko_sentiment_score is None
 
-    def test_cryptopanic_called_with_key(self):
+    def test_sentiment_always_called(self):
+        mock_sentiment = patch(
+            "sentiment.sources_crypto._fetch_coingecko_sentiment", return_value=0.2
+        )
         with (
             patch("sentiment.sources_crypto._fetch_fear_greed", return_value=(50, "Neutral")),
             patch("sentiment.sources_crypto._fetch_coingecko", return_value=(0.0, 0.0, 5)),
             patch("sentiment.sources_crypto._fetch_news", return_value=[]),
-            patch("sentiment.sources_crypto._fetch_cryptopanic", return_value=0.6) as mock_cp,
+            mock_sentiment as mock_s,
         ):
-            result = fetch("BTC/USDT", cryptopanic_api_key="mykey")
+            result = fetch("BTC/USDT")
 
-        mock_cp.assert_called_once_with("BTC", "mykey")
-        assert result.cryptopanic_score == pytest.approx(0.6)
-
-    def test_cryptopanic_failure_leaves_score_none(self):
-        with (
-            patch("sentiment.sources_crypto._fetch_fear_greed", return_value=(50, "Neutral")),
-            patch("sentiment.sources_crypto._fetch_coingecko", return_value=(0.0, 0.0, 5)),
-            patch("sentiment.sources_crypto._fetch_news", return_value=[]),
-            patch("sentiment.sources_crypto._fetch_cryptopanic", return_value=None),
-        ):
-            result = fetch("BTC/USDT", cryptopanic_api_key="mykey")
-
-        assert result.cryptopanic_score is None
+        mock_s.assert_called_once_with("BTC")
+        assert result.coingecko_sentiment_score == pytest.approx(0.2)
 
 
 # ---------------------------------------------------------------------------
@@ -338,22 +350,22 @@ class TestPreScore:
         )
         assert pre_score(sources) == pytest.approx(1.0)
 
-    def test_cryptopanic_included_in_average(self):
+    def test_coingecko_sentiment_included_in_average(self):
         sources = CryptoSources(
             symbol="BTC/USDT",
             fetched_at=0,
             fear_greed_value=75,  # → +0.5
-            cryptopanic_score=1.0,
+            coingecko_sentiment_score=1.0,
         )
         # average of (0.5, 1.0) = 0.75
         assert pre_score(sources) == pytest.approx(0.75)
 
-    def test_cryptopanic_none_not_in_average(self):
+    def test_coingecko_sentiment_none_not_in_average(self):
         sources = CryptoSources(
             symbol="BTC/USDT",
             fetched_at=0,
             fear_greed_value=75,  # → +0.5
-            cryptopanic_score=None,
+            coingecko_sentiment_score=None,
         )
         assert pre_score(sources) == pytest.approx(0.5)
 
@@ -361,9 +373,9 @@ class TestPreScore:
         sources = CryptoSources(
             symbol="BTC/USDT",
             fetched_at=0,
-            fear_greed_value=0,   # -1.0
-            price_change_24h_pct=-20.0,  # -1.0
-            cryptopanic_score=-1.0,
+            fear_greed_value=0,           # -1.0
+            price_change_24h_pct=-20.0,   # -1.0
+            coingecko_sentiment_score=-1.0,
         )
         assert pre_score(sources) == pytest.approx(-1.0)
 
@@ -371,9 +383,9 @@ class TestPreScore:
         sources = CryptoSources(
             symbol="BTC/USDT",
             fetched_at=0,
-            fear_greed_value=100,   # +1.0
-            price_change_24h_pct=20.0,  # +1.0
-            cryptopanic_score=1.0,
+            fear_greed_value=100,         # +1.0
+            price_change_24h_pct=20.0,    # +1.0
+            coingecko_sentiment_score=1.0,
         )
         assert pre_score(sources) == pytest.approx(1.0)
 
@@ -418,19 +430,19 @@ class TestToPromptText:
         assert "Big BTC rally" in text
         assert "ETF approved" in text
 
-    def test_cryptopanic_score_included_when_present(self):
+    def test_coingecko_sentiment_included_when_present(self):
         sources = CryptoSources(
             symbol="BTC/USDT",
             fetched_at=1_700_000_000,
-            cryptopanic_score=0.75,
+            coingecko_sentiment_score=0.6,
         )
         text = to_prompt_text(sources)
-        assert "CryptoPanic" in text
-        assert "+0.75" in text
+        assert "CoinGecko community sentiment score" in text
+        assert "+0.60" in text
 
-    def test_cryptopanic_score_omitted_when_none(self):
+    def test_coingecko_sentiment_omitted_when_none(self):
         text = to_prompt_text(self._full_sources())
-        assert "CryptoPanic" not in text
+        assert "sentiment score" not in text
 
     def test_empty_sources_minimal_output(self):
         sources = CryptoSources(symbol="SOL/USDT", fetched_at=1_700_000_000)
@@ -457,3 +469,13 @@ class TestToPromptText:
         text = to_prompt_text(sources)
         assert "-2.00%" in text
         assert "+-" not in text
+
+    def test_no_cryptopanic_reference(self):
+        sources = CryptoSources(
+            symbol="BTC/USDT",
+            fetched_at=1_700_000_000,
+            coingecko_sentiment_score=0.3,
+        )
+        text = to_prompt_text(sources)
+        assert "CryptoPanic" not in text
+        assert "cryptopanic" not in text
