@@ -294,6 +294,109 @@ class TestErrorHandling:
 
 
 # ---------------------------------------------------------------------------
+# scan_gems — DEX boost
+# ---------------------------------------------------------------------------
+
+class TestDexBoost:
+    def _seed(self, tickers: dict):
+        scan_gems(exchange=_make_exchange(tickers))
+
+    def test_dex_boost_multiplies_score(self, monkeypatch):
+        monkeypatch.setattr(config, "GEM_MIN_VOLUME_USD", 500_000.0)
+        monkeypatch.setattr(config, "GEM_ROC_MIN_PCT", 3.0)
+        monkeypatch.setattr(config, "GEM_VOLUME_SURGE_MULTIPLIER", 2.0)
+        monkeypatch.setattr(config, "DEX_BOOST_MULTIPLIER", 2.0)
+        self._seed({"GEM/USDT": _make_ticker(1_000_000.0, 0.0)})
+        # surge=3x, roc=5 → raw_score=15; with 2x DEX boost → 30
+        result = scan_gems(
+            exchange=_make_exchange({"GEM/USDT": _make_ticker(3_000_000.0, 5.0)}),
+            dex_trending_symbols=frozenset({"GEM"}),
+        )
+        assert len(result) == 1
+        assert abs(result[0].gem_score - 30.0) < 1e-6
+        assert result[0].dex_boost is True
+
+    def test_no_dex_set_leaves_score_unchanged(self, monkeypatch):
+        monkeypatch.setattr(config, "GEM_MIN_VOLUME_USD", 500_000.0)
+        monkeypatch.setattr(config, "GEM_ROC_MIN_PCT", 3.0)
+        monkeypatch.setattr(config, "GEM_VOLUME_SURGE_MULTIPLIER", 2.0)
+        monkeypatch.setattr(config, "DEX_BOOST_MULTIPLIER", 2.0)
+        self._seed({"GEM/USDT": _make_ticker(1_000_000.0, 0.0)})
+        result = scan_gems(
+            exchange=_make_exchange({"GEM/USDT": _make_ticker(3_000_000.0, 5.0)}),
+        )
+        assert len(result) == 1
+        assert abs(result[0].gem_score - 15.0) < 1e-6
+        assert result[0].dex_boost is False
+
+    def test_token_not_in_dex_set_unaffected(self, monkeypatch):
+        monkeypatch.setattr(config, "GEM_MIN_VOLUME_USD", 500_000.0)
+        monkeypatch.setattr(config, "GEM_ROC_MIN_PCT", 3.0)
+        monkeypatch.setattr(config, "GEM_VOLUME_SURGE_MULTIPLIER", 2.0)
+        monkeypatch.setattr(config, "DEX_BOOST_MULTIPLIER", 2.0)
+        self._seed({"GEM/USDT": _make_ticker(1_000_000.0, 0.0)})
+        result = scan_gems(
+            exchange=_make_exchange({"GEM/USDT": _make_ticker(3_000_000.0, 5.0)}),
+            dex_trending_symbols=frozenset({"OTHER"}),
+        )
+        assert len(result) == 1
+        assert abs(result[0].gem_score - 15.0) < 1e-6
+        assert result[0].dex_boost is False
+
+    def test_dex_boost_affects_ranking(self, monkeypatch):
+        monkeypatch.setattr(config, "GEM_MIN_VOLUME_USD", 500_000.0)
+        monkeypatch.setattr(config, "GEM_ROC_MIN_PCT", 3.0)
+        monkeypatch.setattr(config, "GEM_VOLUME_SURGE_MULTIPLIER", 2.0)
+        monkeypatch.setattr(config, "DEX_BOOST_MULTIPLIER", 3.0)
+        monkeypatch.setattr(config, "GEM_TOP_N", 10)
+        self._seed({
+            "A/USDT": _make_ticker(1_000_000.0, 0.0),
+            "B/USDT": _make_ticker(1_000_000.0, 0.0),
+        })
+        # A: surge=3x, roc=5 → raw=15; no DEX → 15
+        # B: surge=2x, roc=4 → raw=8; DEX 3x → 24
+        tickers = {
+            "A/USDT": _make_ticker(3_000_000.0, 5.0),
+            "B/USDT": _make_ticker(2_000_000.0, 4.0),
+        }
+        result = scan_gems(
+            exchange=_make_exchange(tickers),
+            dex_trending_symbols=frozenset({"B"}),
+        )
+        assert result[0].symbol == "B/USDT"
+        assert result[0].dex_boost is True
+        assert result[1].symbol == "A/USDT"
+        assert result[1].dex_boost is False
+
+    def test_multiplier_one_is_noop(self, monkeypatch):
+        monkeypatch.setattr(config, "GEM_MIN_VOLUME_USD", 500_000.0)
+        monkeypatch.setattr(config, "GEM_ROC_MIN_PCT", 3.0)
+        monkeypatch.setattr(config, "GEM_VOLUME_SURGE_MULTIPLIER", 2.0)
+        monkeypatch.setattr(config, "DEX_BOOST_MULTIPLIER", 1.0)
+        self._seed({"GEM/USDT": _make_ticker(1_000_000.0, 0.0)})
+        result_with_dex = scan_gems(
+            exchange=_make_exchange({"GEM/USDT": _make_ticker(3_000_000.0, 5.0)}),
+            dex_trending_symbols=frozenset({"GEM"}),
+        )
+        reset_history()
+        self._seed({"GEM/USDT": _make_ticker(1_000_000.0, 0.0)})
+        result_without_dex = scan_gems(
+            exchange=_make_exchange({"GEM/USDT": _make_ticker(3_000_000.0, 5.0)}),
+        )
+        assert abs(result_with_dex[0].gem_score - result_without_dex[0].gem_score) < 1e-6
+
+    def test_dex_boost_flag_false_by_default(self, monkeypatch):
+        monkeypatch.setattr(config, "GEM_MIN_VOLUME_USD", 500_000.0)
+        monkeypatch.setattr(config, "GEM_ROC_MIN_PCT", 3.0)
+        monkeypatch.setattr(config, "GEM_VOLUME_SURGE_MULTIPLIER", 2.0)
+        self._seed({"GEM/USDT": _make_ticker(1_000_000.0, 0.0)})
+        result = scan_gems(
+            exchange=_make_exchange({"GEM/USDT": _make_ticker(3_000_000.0, 5.0)}),
+        )
+        assert result[0].dex_boost is False
+
+
+# ---------------------------------------------------------------------------
 # reset_history
 # ---------------------------------------------------------------------------
 

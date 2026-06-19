@@ -51,7 +51,8 @@ class GemCandidate:
     volume_usd_24h: float     # 24 h notional USDT volume at scan time
     volume_surge_ratio: float # current_volume / rolling_avg_volume
     roc_pct: float            # 24 h price change (%)
-    gem_score: float          # surge_ratio × roc_pct (ranking key)
+    gem_score: float          # surge_ratio × roc_pct, boosted when dex_boost=True
+    dex_boost: bool = False   # True when token is also trending on a DEX platform
 
 
 def _is_excluded(base_token: str) -> bool:
@@ -82,6 +83,7 @@ def scan_gems(
     exchange: Any | None = None,
     base_symbols: set[str] | None = None,
     top_n: int | None = None,
+    dex_trending_symbols: frozenset[str] | None = None,
 ) -> list[GemCandidate]:
     """Scan Binance spot for ignition candidates.
 
@@ -95,6 +97,12 @@ def scan_gems(
         to prevent duplicates in the assembled universe.
     top_n:
         Maximum number of candidates to return.  Defaults to ``config.GEM_TOP_N``.
+    dex_trending_symbols:
+        Base token symbols (uppercase, e.g. ``{'SOL', 'AVAX'}``) currently
+        trending on DEX platforms.  When a candidate's base token is present,
+        its gem_score is multiplied by ``config.DEX_BOOST_MULTIPLIER`` and
+        ``GemCandidate.dex_boost`` is set to ``True``.  Pass ``None`` (default)
+        to skip DEX boosting entirely.
 
     Returns
     -------
@@ -108,6 +116,7 @@ def scan_gems(
     if exchange is None:
         exchange = _make_exchange()
     base_set: set[str] = base_symbols or set()
+    dex_set: frozenset[str] = dex_trending_symbols or frozenset()
 
     try:
         tickers: dict[str, Any] = exchange.fetch_tickers()
@@ -150,23 +159,27 @@ def scan_gems(
         if surge_ratio < config.GEM_VOLUME_SURGE_MULTIPLIER:
             continue
 
-        gem_score = surge_ratio * roc_pct
+        raw_score = surge_ratio * roc_pct
+        in_dex = base_token in dex_set
+        gem_score = raw_score * config.DEX_BOOST_MULTIPLIER if in_dex else raw_score
         candidates.append(GemCandidate(
             symbol=symbol,
             volume_usd_24h=volume_usd,
             volume_surge_ratio=surge_ratio,
             roc_pct=roc_pct,
             gem_score=gem_score,
+            dex_boost=in_dex,
         ))
 
     candidates.sort(key=lambda c: c.gem_score, reverse=True)
     result = candidates[:top_n]
 
     _log.info(
-        "gem_scanner: screened=%d surges=%d gems=%d",
+        "gem_scanner: screened=%d surges=%d gems=%d dex_boosted=%d",
         screened,
         len(candidates),
         len(result),
+        sum(1 for c in result if c.dex_boost),
     )
     return result
 
