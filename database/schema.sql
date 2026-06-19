@@ -174,3 +174,26 @@ CREATE TABLE IF NOT EXISTS screener_runs (
 
 CREATE INDEX IF NOT EXISTS ix_screener_run_ts
     ON screener_runs (run_ts DESC);
+
+-- ─────────────────────────────────────────────
+-- Sweep results — pre-computed backtest metrics per SIGNAL_THRESHOLD grid point.
+-- sweep_id groups all threshold rows from a single sweep run.
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS sweep_results (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    sweep_id         TEXT    NOT NULL,   -- hex slug grouping all thresholds from one run
+    run_ts           INTEGER NOT NULL,   -- unix epoch when the sweep ran
+    signal_threshold REAL    NOT NULL,
+    total_return     REAL    NOT NULL,
+    cagr             REAL    NOT NULL,
+    sharpe           REAL    NOT NULL,
+    max_dd           REAL    NOT NULL,
+    win_rate         REAL    NOT NULL,
+    n_trades         INTEGER NOT NULL,
+    inserted_at      INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS ix_sweep_results_run_ts
+    ON sweep_results (run_ts DESC);
+CREATE UNIQUE INDEX IF NOT EXISTS uq_sweep_results_sweep_threshold
+    ON sweep_results (sweep_id, signal_threshold);
