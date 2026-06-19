@@ -21,6 +21,8 @@ from engine.order_executor import (
 from engine.risk_manager import RiskManager
 from engine.signal_aggregator import AggregatedSignal
 
+import sqlite3 as _sqlite3
+
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -61,6 +63,7 @@ def _make_signal(
     asset_class: str = "crypto",
     action: str = "buy",
     signal_id: int = 1,
+    origin: str = "",
 ) -> AggregatedSignal:
     return AggregatedSignal(
         symbol=symbol,
@@ -72,6 +75,7 @@ def _make_signal(
         sentiment_score=0.2,
         composite_score=0.35,
         action=action,
+        origin=origin,
     )
 
 
@@ -580,3 +584,164 @@ class TestExecuteOnce:
         custom_ex = OrderExecutor()
         results = execute_once([_make_signal(action="buy")], equity=10_000.0, executor=custom_ex)
         assert len(results) == 1
+
+
+# ---------------------------------------------------------------------------
+# Gem risk — smaller position size + origin stored in positions
+# ---------------------------------------------------------------------------
+
+class TestGemPositionSizing:
+    def test_gem_buy_uses_gem_position_size(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        raw_price = 100.0
+        _insert_price(temp_db, "GEM/USDT", raw_price)
+        sig = _make_signal(symbol="GEM/USDT", action="buy", origin="gem")
+        result = executor.execute(sig, equity=10_000.0)
+
+        assert result is not None
+        expected_qty = 10_000.0 * config.GEM_POSITION_SIZE_PCT / raw_price
+        assert result.quantity == pytest.approx(expected_qty)
+
+    def test_base_buy_uses_standard_position_size(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        raw_price = 100.0
+        _insert_price(temp_db, "BTC/USDT", raw_price)
+        sig = _make_signal(symbol="BTC/USDT", action="buy", origin="base")
+        result = executor.execute(sig, equity=10_000.0)
+
+        assert result is not None
+        expected_qty = 10_000.0 * config.POSITION_SIZE_PCT / raw_price
+        assert result.quantity == pytest.approx(expected_qty)
+
+    def test_gem_position_smaller_than_base(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        # GEM_POSITION_SIZE_PCT (0.05) < POSITION_SIZE_PCT (0.10) by default
+        assert config.GEM_POSITION_SIZE_PCT < config.POSITION_SIZE_PCT
+
+    def test_gem_origin_stored_in_db(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        _insert_price(temp_db, "GEM/USDT", 50.0)
+        sig = _make_signal(symbol="GEM/USDT", action="buy", origin="gem")
+        executor.execute(sig, equity=10_000.0)
+
+        conn = _sqlite3.connect(temp_db)
+        row = conn.execute("SELECT origin FROM positions").fetchone()
+        conn.close()
+        assert row[0] == "gem"
+
+    def test_dex_boosted_origin_stored_in_db(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        _insert_price(temp_db, "DEX/USDT", 10.0)
+        sig = _make_signal(symbol="DEX/USDT", action="buy", origin="dex_boosted")
+        executor.execute(sig, equity=10_000.0)
+
+        conn = _sqlite3.connect(temp_db)
+        row = conn.execute("SELECT origin FROM positions").fetchone()
+        conn.close()
+        assert row[0] == "dex_boosted"
+
+    def test_gem_sets_trailing_peak_to_entry_price(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        raw_price = 200.0
+        _insert_price(temp_db, "GEM/USDT", raw_price)
+        sig = _make_signal(symbol="GEM/USDT", action="buy", origin="gem")
+        executor.execute(sig, equity=10_000.0)
+
+        conn = _sqlite3.connect(temp_db)
+        row = conn.execute("SELECT trailing_peak_price FROM positions").fetchone()
+        conn.close()
+        # trailing_peak_price is set at entry price (post-fee), not None
+        assert row[0] is not None
+
+    def test_base_position_has_null_trailing_peak(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        _insert_price(temp_db, "BTC/USDT", 50_000.0)
+        sig = _make_signal(symbol="BTC/USDT", action="buy", origin="base")
+        executor.execute(sig, equity=10_000.0)
+
+        conn = _sqlite3.connect(temp_db)
+        row = conn.execute("SELECT trailing_peak_price FROM positions").fetchone()
+        conn.close()
+        assert row[0] is None
+
+
+# ---------------------------------------------------------------------------
+# Gem risk — force_close (trailing stop exit)
+# ---------------------------------------------------------------------------
+
+class TestForceClose:
+    def _insert_gem_position(
+        self,
+        db_path: str,
+        symbol: str = "GEM/USDT",
+        entry_price: float = 100.0,
+        trailing_peak: float = 110.0,
+    ) -> int:
+        conn = _sqlite3.connect(db_path)
+        cur = conn.execute(
+            """
+            INSERT INTO positions
+                (symbol, asset_class, side, quantity, entry_price, current_price,
+                 is_paper, origin, trailing_peak_price)
+            VALUES (?, 'crypto', 'long', 0.5, ?, ?, 1, 'gem', ?)
+            """,
+            (symbol, entry_price, entry_price, trailing_peak),
+        )
+        pos_id = cur.lastrowid
+        conn.commit()
+        conn.close()
+        return pos_id
+
+    def test_force_close_closes_position(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        self._insert_gem_position(temp_db, "GEM/USDT", entry_price=100.0)
+        _insert_price(temp_db, "GEM/USDT", 90.0)
+        result = executor.force_close("GEM/USDT")
+
+        assert result is not None
+        assert result.side == "sell"
+        assert result.symbol == "GEM/USDT"
+        conn = _sqlite3.connect(temp_db)
+        pos = conn.execute("SELECT status FROM positions").fetchone()
+        conn.close()
+        assert pos[0] == "closed"
+
+    def test_force_close_no_position_returns_none(self, executor, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        result = executor.force_close("MISSING/USDT")
+        assert result is None
+
+    def test_force_close_no_price_returns_none(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        self._insert_gem_position(temp_db, "GEM/USDT")
+        # No price row inserted → force_close returns None
+        result = executor.force_close("GEM/USDT")
+        assert result is None
+
+    def test_force_close_computes_pnl(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        entry = 100.0
+        close_raw = 90.0
+        qty = 0.5
+        self._insert_gem_position(temp_db, "GEM/USDT", entry_price=entry)
+        _insert_price(temp_db, "GEM/USDT", close_raw)
+        executor.force_close("GEM/USDT")
+
+        close_exec = close_raw * (1.0 - config.FEE_PCT - config.SLIPPAGE_PCT)
+        expected_pnl = (close_exec - entry) * qty
+        conn = _sqlite3.connect(temp_db)
+        pos = conn.execute("SELECT realized_pnl FROM positions").fetchone()
+        conn.close()
+        assert pos[0] == pytest.approx(expected_pnl)
+
+    def test_force_close_creates_sell_order(self, executor, temp_db, monkeypatch):
+        monkeypatch.setattr(config, "CRYPTO_LIVE", False)
+        self._insert_gem_position(temp_db, "GEM/USDT")
+        _insert_price(temp_db, "GEM/USDT", 90.0)
+        executor.force_close("GEM/USDT")
+
+        conn = _sqlite3.connect(temp_db)
+        order = conn.execute("SELECT side, status FROM orders").fetchone()
+        conn.close()
+        assert order[0] == "sell"
+        assert order[1] == "filled"
