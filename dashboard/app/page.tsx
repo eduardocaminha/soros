@@ -144,6 +144,57 @@ const SETTING_GROUPS: Array<{ label: string; keys: string[] }> = [
   { label: "Posição & Taxas", keys: ["POSITION_SIZE_PCT", "WATCHLIST_OHLCV_LIMIT", "SENTIMENT_MAX_AGE_SECONDS", "INITIAL_CAPITAL", "FEE_PCT", "SLIPPAGE_PCT"] },
 ];
 
+// ─── Glossário ───────────────────────────────────────────────────────────────
+
+const GLOSSARY: Record<string, string> = {
+  "Drawdown": "Queda máxima do pico de equity até o vale mais profundo. O bot interrompe novas ordens ao atingir 15%.",
+  "Equity": "Valor total da carteira: capital base + P&L realizado + P&L não realizado das posições abertas.",
+  "P&L": "Profit & Loss — lucro ou prejuízo. 'Realizado': trades fechados. 'Não realizado': posições ainda abertas.",
+  "Momentum": "Sinal baseado em tendência de preço (MACD, EMA, RSI). Positivo = tendência de alta; negativo = baixa.",
+  "Funding": "Taxa periódica em contratos perpétuos de cripto. Positiva = longs pagam shorts (mercado aquecido); negativa = shorts pagam longs.",
+  "Composite": "Score ponderado que combina momentum, volatilidade, funding e sentimento. Superar o threshold aciona compra/venda.",
+  "Volatilidade": "Dispersão dos retornos do ativo. Alta volatilidade indica risco elevado e é usada como sinal de qualidade de entrada.",
+  "Sentimento": "Score de sentimento gerado pelo Claude (IA). Analisa notícias e indicadores para estimar o viés otimista/pessimista.",
+  "Confiança": "Grau de certeza do modelo de sentimento na classificação emitida (0–100%).",
+  "Debate": "Debate bull × bear entre dois agentes IA. Ativado quando o sentimento contradiz o score determinístico, refinando o sinal.",
+  "Convicção": "Score final do screener para o símbolo (0–1). Combina composite e sentimento ponderados para ranquear candidatos.",
+  "Screener": "Módulo de seleção automática: ranqueia o universo por convicção e escolhe os top-N símbolos a cada ciclo.",
+  "Origem": "Como o símbolo entrou no universo: base (market cap), gem (ignição de volume), dex (tendência em DEX).",
+  "Gem": "Candidato de ignição: ativo com volume surging (≥ 2× média) e ROC elevado, detectado pelo gem scanner.",
+  "Threshold": "Limiar mínimo do composite score para acionar uma ordem. Mais alto = mais seletivo; mais baixo = mais trades.",
+  "CAGR": "Compound Annual Growth Rate — retorno anualizado da estratégia como se crescesse a taxa constante.",
+  "Sharpe": "Relação retorno/risco ajustado. Quanto maior, melhor a qualidade do retorno. Acima de 1,0 é considerado bom.",
+  "Max DD": "Drawdown máximo no período do backtest — maior queda pico-a-vale registrada.",
+  "Win Rate": "Percentual de trades lucrativos. Ex: 60% = 6 de cada 10 trades fecharam no positivo.",
+  "Paper": "Modo simulação: ordens são executadas virtualmente sem dinheiro real. Obrigatório 48 h+ antes de ativar live.",
+};
+
+const SETTINGS_DESCRIPTIONS: Record<string, string> = {
+  "LOOP_INTERVAL_SECONDS": "Intervalo entre ciclos do bot (segundos). A cada ciclo, o bot reavalia o mercado e executa ordens.",
+  "SIGNAL_THRESHOLD": "Score composto mínimo para acionar compra/venda. Mais alto = estratégia mais conservadora e seletiva.",
+  "DEBATE_DIVERGENCE_THRESHOLD": "Quando o |score composto| cai abaixo deste valor, o debate bull/bear via IA é ativado para refinar o sinal.",
+  "SCREENER_ENABLED": "Ativa o screener automático. Quando true, o bot ranqueia o universo e seleciona os top-N símbolos por ciclo.",
+  "SCREENER_TOP_N": "Máximo de símbolos selecionados pelo screener por ciclo (excluindo pinned, que são sempre incluídos).",
+  "SCREENER_MIN_VOLUME_USD": "Volume mínimo de 24 h (USD) que um símbolo precisa ter para ser selecionado pelo screener.",
+  "MARKETCAP_TOP_N": "Top-N coins por market cap (CoinGecko) incluídas no universo base a cada refresh.",
+  "MARKETCAP_REFRESH_SECS": "Intervalo de atualização do ranking de market cap via CoinGecko (segundos).",
+  "DEX_BOOST_MULTIPLIER": "Multiplicador no gem_score quando o ativo também está em alta em DEX (DexScreener/GeckoTerminal). 1.0 = sem boost.",
+  "DEX_SCAN_CACHE_SECS": "Tempo de cache dos resultados DEX antes de nova consulta (segundos).",
+  "GEM_VOLUME_SURGE_MULTIPLIER": "Volume surge mínimo: o ativo precisa de ≥ N× o seu volume médio para qualificar como gem.",
+  "GEM_ROC_MIN_PCT": "Rate-of-change mínimo (%) na janela curta para qualificar como candidato gem.",
+  "GEM_TOP_N": "Máximo de gems surfaced pelo scanner por ciclo.",
+  "GEM_MIN_VOLUME_USD": "Piso de liquidez (USD 24 h) para um candidato gem.",
+  "IGNITION_WEIGHT": "Peso do sinal de ignição (gem) no composite score. 0.0 = sinal de ignição desabilitado.",
+  "GEM_POSITION_SIZE_PCT": "Fração do equity por posição gem (deve ser ≤ POSITION_SIZE_PCT). Ex: 0.05 = 5%.",
+  "GEM_TRAILING_STOP_PCT": "Distância do trailing stop para posições gem (fração). Ex: 0.05 = 5%. 0.0 = desabilitado.",
+  "POSITION_SIZE_PCT": "Fração do equity alocada por posição padrão. Ex: 0.10 = 10% do capital por trade.",
+  "WATCHLIST_OHLCV_LIMIT": "Candles históricos por símbolo da watchlist. Mínimo de 26 para que os indicadores funcionem.",
+  "SENTIMENT_MAX_AGE_SECONDS": "Idade máxima (segundos) do sinal de sentimento antes de ser descartado como obsoleto.",
+  "INITIAL_CAPITAL": "Capital inicial (USD) para cálculo de P&L e equity curve no modo paper.",
+  "FEE_PCT": "Taxa de corretagem por lado de cada trade. Ex: 0.001 = 0,1% (padrão Binance maker).",
+  "SLIPPAGE_PCT": "Deslizamento estimado de preço por lado de cada trade. Ex: 0.0005 = 0,05%.",
+};
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
 const POLL_MS = 15_000;
@@ -197,6 +248,57 @@ function Sparkline({ points }: { points: EquityPoint[] }) {
   );
 }
 
+// ─── Tooltip ─────────────────────────────────────────────────────────────────
+
+function Tooltip({ text, children }: { text: string; children: React.ReactNode }) {
+  const [show, setShow] = useState(false);
+  return (
+    <span
+      style={{ position: "relative", display: "inline-flex", alignItems: "center", gap: 3 }}
+      onMouseEnter={() => setShow(true)}
+      onMouseLeave={() => setShow(false)}
+    >
+      {children}
+      <span style={{
+        fontSize: 9,
+        color: "var(--text-muted)",
+        border: "1px solid var(--border)",
+        borderRadius: "50%",
+        width: 13,
+        height: 13,
+        display: "inline-flex",
+        alignItems: "center",
+        justifyContent: "center",
+        flexShrink: 0,
+        cursor: "help",
+        lineHeight: 1,
+      }}>?</span>
+      {show && (
+        <span style={{
+          position: "absolute",
+          top: "calc(100% + 4px)",
+          left: 0,
+          zIndex: 1000,
+          background: "var(--surface)",
+          border: "1px solid var(--border)",
+          borderRadius: 6,
+          padding: "7px 10px",
+          fontSize: 11,
+          color: "var(--text)",
+          whiteSpace: "normal",
+          minWidth: 200,
+          maxWidth: 280,
+          boxShadow: "0 4px 16px rgba(0,0,0,0.6)",
+          lineHeight: 1.45,
+          pointerEvents: "none",
+        }}>
+          {text}
+        </span>
+      )}
+    </span>
+  );
+}
+
 // ─── Sections ────────────────────────────────────────────────────────────────
 
 function EquityCard({ data }: { data: DashData }) {
@@ -205,7 +307,7 @@ function EquityCard({ data }: { data: DashData }) {
 
   return (
     <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 24 }}>
-      <Card label="Equity">
+      <Card label={<Tooltip text={GLOSSARY["Equity"]}>Equity</Tooltip>}>
         {eq ? (
           <>
             <big>${fmt(eq.equity)}</big>
@@ -214,7 +316,7 @@ function EquityCard({ data }: { data: DashData }) {
         ) : <span className="neutral">—</span>}
       </Card>
 
-      <Card label="Drawdown">
+      <Card label={<Tooltip text={GLOSSARY["Drawdown"]}>Drawdown</Tooltip>}>
         {eq ? (
           <span className={eq.drawdown_pct > 10 ? "negative" : eq.drawdown_pct > 5 ? "" : "positive"}>
             {fmt(eq.drawdown_pct, 1)}%{" "}
@@ -223,11 +325,11 @@ function EquityCard({ data }: { data: DashData }) {
         ) : <span className="neutral">—</span>}
       </Card>
 
-      <Card label="P&L Não Realizado">
+      <Card label={<Tooltip text={GLOSSARY["P&L"]}>P&L Não Realizado</Tooltip>}>
         {data.positions.length ? fmtPnl(totalUnrealized) : <span className="neutral">—</span>}
       </Card>
 
-      <Card label="P&L Realizado">
+      <Card label={<Tooltip text={GLOSSARY["P&L"]}>P&L Realizado</Tooltip>}>
         {fmtPnl(data.realizedPnl)}
       </Card>
 
@@ -238,7 +340,7 @@ function EquityCard({ data }: { data: DashData }) {
   );
 }
 
-function Card({ label, children, wide }: { label: string; children: React.ReactNode; wide?: boolean }) {
+function Card({ label, children, wide }: { label: React.ReactNode; children: React.ReactNode; wide?: boolean }) {
   return (
     <div style={{
       background: "var(--surface)",
@@ -295,8 +397,12 @@ function SignalsTable({ signals }: { signals: Signal[] }) {
         <table>
           <thead>
             <tr>
-              <th>Symbol</th><th>Classe</th><th>Momentum</th><th>Volatilidade</th>
-              <th>Funding</th><th>Composite</th><th>Ação</th><th>Em</th>
+              <th>Symbol</th><th>Classe</th>
+              <th><Tooltip text={GLOSSARY["Momentum"]}>Momentum</Tooltip></th>
+              <th><Tooltip text={GLOSSARY["Volatilidade"]}>Volatilidade</Tooltip></th>
+              <th><Tooltip text={GLOSSARY["Funding"]}>Funding</Tooltip></th>
+              <th><Tooltip text={GLOSSARY["Composite"]}>Composite</Tooltip></th>
+              <th>Ação</th><th>Em</th>
             </tr>
           </thead>
           <tbody>
@@ -328,8 +434,12 @@ function SentimentTable({ sentiment }: { sentiment: SentimentRow[] }) {
         <table>
           <thead>
             <tr>
-              <th>Symbol</th><th>Classe</th><th>Score</th><th>Rótulo</th>
-              <th>Confiança</th><th>Debate</th><th>Em</th>
+              <th>Symbol</th><th>Classe</th>
+              <th><Tooltip text={GLOSSARY["Composite"]}>Score</Tooltip></th>
+              <th>Rótulo</th>
+              <th><Tooltip text={GLOSSARY["Confiança"]}>Confiança</Tooltip></th>
+              <th><Tooltip text={GLOSSARY["Debate"]}>Debate</Tooltip></th>
+              <th>Em</th>
             </tr>
           </thead>
           <tbody>
@@ -384,8 +494,13 @@ function ScreenerTable({ screener }: { screener: ScreenerEntry[] }) {
       <table>
         <thead>
           <tr>
-            <th>Symbol</th><th>Classe</th><th>Origem</th><th>Tipo</th><th>Vol 24h (USD)</th>
-            <th>Composite</th><th>Sentimento</th><th>Convicção</th><th>Estado</th>
+            <th>Symbol</th><th>Classe</th>
+            <th><Tooltip text={GLOSSARY["Origem"]}>Origem</Tooltip></th>
+            <th>Tipo</th><th>Vol 24h (USD)</th>
+            <th><Tooltip text={GLOSSARY["Composite"]}>Composite</Tooltip></th>
+            <th><Tooltip text={GLOSSARY["Sentimento"]}>Sentimento</Tooltip></th>
+            <th><Tooltip text={GLOSSARY["Convicção"]}>Convicção</Tooltip></th>
+            <th>Estado</th>
           </tr>
         </thead>
         <tbody>
@@ -511,12 +626,12 @@ function SweepTable() {
       <table>
         <thead>
           <tr>
-            <th>Threshold</th>
+            <th><Tooltip text={GLOSSARY["Threshold"]}>Threshold</Tooltip></th>
             <th>Retorno</th>
-            <th>CAGR</th>
-            <th>Sharpe</th>
-            <th>Max DD</th>
-            <th>Win Rate</th>
+            <th><Tooltip text={GLOSSARY["CAGR"]}>CAGR</Tooltip></th>
+            <th><Tooltip text={GLOSSARY["Sharpe"]}>Sharpe</Tooltip></th>
+            <th><Tooltip text={GLOSSARY["Max DD"]}>Max DD</Tooltip></th>
+            <th><Tooltip text={GLOSSARY["Win Rate"]}>Win Rate</Tooltip></th>
             <th>Trades</th>
           </tr>
         </thead>
@@ -590,9 +705,16 @@ function Section({ title, count, children }: { title: string; count?: number; ch
 // ─── Settings ────────────────────────────────────────────────────────────────
 
 function LockedRow({ setting }: { setting: SettingRow }) {
+  const desc = SETTINGS_DESCRIPTIONS[setting.key];
   return (
     <tr style={{ opacity: 0.65 }}>
-      <td><code style={{ fontSize: 11 }}>{setting.key}</code></td>
+      <td>
+        {desc ? (
+          <Tooltip text={desc}><code style={{ fontSize: 11 }}>{setting.key}</code></Tooltip>
+        ) : (
+          <code style={{ fontSize: 11 }}>{setting.key}</code>
+        )}
+      </td>
       <td className="neutral" style={{ fontSize: 11 }}>{setting.type}</td>
       <td>
         {setting.type === "bool" ? (
@@ -720,10 +842,15 @@ function EditableRow({ setting, onRefresh }: { setting: SettingRow; onRefresh: (
     marginLeft: 6,
   };
 
+  const desc = SETTINGS_DESCRIPTIONS[setting.key];
   return (
     <tr>
       <td>
-        <code style={{ fontSize: 11 }}>{setting.key}</code>
+        {desc ? (
+          <Tooltip text={desc}><code style={{ fontSize: 11 }}>{setting.key}</code></Tooltip>
+        ) : (
+          <code style={{ fontSize: 11 }}>{setting.key}</code>
+        )}
         {setting.override !== null && (
           <span className="badge badge-warn" style={{ marginLeft: 6, fontSize: 10 }}>substituído</span>
         )}
