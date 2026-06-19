@@ -102,9 +102,31 @@ interface DashData {
   error?: string;
 }
 
+interface SettingRow {
+  key: string;
+  editable: boolean;
+  locked: boolean;
+  type: "int" | "float" | "bool";
+  min: number | null;
+  max: number | null;
+  effectiveValue: number | boolean;
+  override: string | null;
+}
+
+type TabId = "dashboard" | "settings";
+
+const SETTING_GROUPS: Array<{ label: string; keys: string[] }> = [
+  { label: "Loop", keys: ["LOOP_INTERVAL_SECONDS"] },
+  { label: "Signals", keys: ["SIGNAL_THRESHOLD", "DEBATE_DIVERGENCE_THRESHOLD"] },
+  { label: "Screener", keys: ["SCREENER_ENABLED", "SCREENER_TOP_N", "SCREENER_MIN_VOLUME_USD"] },
+  { label: "Market Cap / DEX", keys: ["MARKETCAP_TOP_N", "MARKETCAP_REFRESH_SECS", "DEX_BOOST_MULTIPLIER", "DEX_SCAN_CACHE_SECS"] },
+  { label: "Gems", keys: ["GEM_VOLUME_SURGE_MULTIPLIER", "GEM_ROC_MIN_PCT", "GEM_TOP_N", "GEM_MIN_VOLUME_USD", "IGNITION_WEIGHT", "GEM_POSITION_SIZE_PCT", "GEM_TRAILING_STOP_PCT"] },
+  { label: "Position & Fees", keys: ["POSITION_SIZE_PCT", "WATCHLIST_OHLCV_LIMIT", "SENTIMENT_MAX_AGE_SECONDS", "INITIAL_CAPITAL", "FEE_PCT", "SLIPPAGE_PCT"] },
+];
+
 // ─── Helpers ─────────────────────────────────────────────────────────────────
 
-const POLL_MS = 15_000; // 15 s
+const POLL_MS = 15_000;
 
 function fmt(n: number, decimals = 2) {
   return n.toFixed(decimals);
@@ -163,7 +185,6 @@ function EquityCard({ data }: { data: DashData }) {
 
   return (
     <div style={{ display: "flex", gap: 24, flexWrap: "wrap", marginBottom: 24 }}>
-      {/* Equity */}
       <Card label="Equity">
         {eq ? (
           <>
@@ -173,7 +194,6 @@ function EquityCard({ data }: { data: DashData }) {
         ) : <span className="neutral">—</span>}
       </Card>
 
-      {/* Drawdown */}
       <Card label="Drawdown">
         {eq ? (
           <span className={eq.drawdown_pct > 10 ? "negative" : eq.drawdown_pct > 5 ? "" : "positive"}>
@@ -183,17 +203,14 @@ function EquityCard({ data }: { data: DashData }) {
         ) : <span className="neutral">—</span>}
       </Card>
 
-      {/* Unrealized P&L */}
       <Card label="Unrealized P&L">
         {data.positions.length ? fmtPnl(totalUnrealized) : <span className="neutral">—</span>}
       </Card>
 
-      {/* Realized P&L */}
       <Card label="Realized P&L">
         {fmtPnl(data.realizedPnl)}
       </Card>
 
-      {/* Sparkline */}
       <Card label="Equity (48h)" wide>
         <Sparkline points={data.equityCurve} />
       </Card>
@@ -451,12 +468,308 @@ function Section({ title, count, children }: { title: string; count?: number; ch
   );
 }
 
+// ─── Settings ────────────────────────────────────────────────────────────────
+
+function LockedRow({ setting }: { setting: SettingRow }) {
+  return (
+    <tr style={{ opacity: 0.65 }}>
+      <td><code style={{ fontSize: 11 }}>{setting.key}</code></td>
+      <td className="neutral" style={{ fontSize: 11 }}>{setting.type}</td>
+      <td>
+        {setting.type === "bool" ? (
+          <input
+            type="checkbox"
+            checked={setting.effectiveValue as boolean}
+            disabled
+            style={{ cursor: "not-allowed" }}
+          />
+        ) : (
+          <span style={{ fontSize: 12 }}>{String(setting.effectiveValue)}</span>
+        )}
+      </td>
+      <td><span className="badge badge-error" style={{ fontSize: 10 }}>locked</span></td>
+    </tr>
+  );
+}
+
+function EditableRow({ setting, onRefresh }: { setting: SettingRow; onRefresh: () => void }) {
+  const [draft, setDraft] = useState(String(setting.effectiveValue));
+  const [dirty, setDirty] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const [flash, setFlash] = useState<{ ok: boolean; text: string } | null>(null);
+
+  useEffect(() => {
+    if (!dirty) setDraft(String(setting.effectiveValue));
+  }, [setting.effectiveValue, dirty]);
+
+  const showFlash = (ok: boolean, text: string) => {
+    setFlash({ ok, text });
+    setTimeout(() => setFlash(null), 2500);
+  };
+
+  const handleSave = async () => {
+    setSaving(true);
+    try {
+      const value =
+        setting.type === "bool"
+          ? draft === "true"
+          : setting.type === "int"
+          ? parseInt(draft, 10)
+          : parseFloat(draft);
+      const res = await fetch(`/api/settings/${setting.key}`, {
+        method: "PUT",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ value }),
+      });
+      if (res.ok) {
+        setDirty(false);
+        showFlash(true, "saved");
+        onRefresh();
+      } else {
+        const json = (await res.json()) as { error?: string };
+        showFlash(false, json.error ?? "error");
+      }
+    } catch (e) {
+      showFlash(false, String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleBoolToggle = (checked: boolean) => {
+    const prev = draft;
+    setDraft(checked ? "true" : "false");
+    setSaving(true);
+    (async () => {
+      try {
+        const res = await fetch(`/api/settings/${setting.key}`, {
+          method: "PUT",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ value: checked }),
+        });
+        if (res.ok) {
+          showFlash(true, "saved");
+          onRefresh();
+        } else {
+          setDraft(prev);
+          const json = (await res.json()) as { error?: string };
+          showFlash(false, json.error ?? "error");
+        }
+      } catch (e) {
+        setDraft(prev);
+        showFlash(false, String(e));
+      } finally {
+        setSaving(false);
+      }
+    })();
+  };
+
+  const handleReset = async () => {
+    setSaving(true);
+    try {
+      const res = await fetch(`/api/settings/${setting.key}`, { method: "DELETE" });
+      if (res.ok) {
+        setDirty(false);
+        showFlash(true, "reset");
+        onRefresh();
+      } else {
+        showFlash(false, "reset failed");
+      }
+    } catch (e) {
+      showFlash(false, String(e));
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const rangeStr =
+    setting.min != null && setting.max != null
+      ? `${setting.min}–${setting.max}`
+      : setting.min != null
+      ? `≥${setting.min}`
+      : setting.max != null
+      ? `≤${setting.max}`
+      : "—";
+
+  const btnBase: React.CSSProperties = {
+    padding: "2px 8px",
+    borderRadius: 4,
+    fontSize: 11,
+    cursor: "pointer",
+    fontFamily: "inherit",
+    background: "transparent",
+    marginLeft: 6,
+  };
+
+  return (
+    <tr>
+      <td>
+        <code style={{ fontSize: 11 }}>{setting.key}</code>
+        {setting.override !== null && (
+          <span className="badge badge-warn" style={{ marginLeft: 6, fontSize: 10 }}>override</span>
+        )}
+      </td>
+      <td className="neutral" style={{ fontSize: 11 }}>{setting.type}</td>
+      <td className="neutral" style={{ fontSize: 11 }}>{rangeStr}</td>
+      <td>
+        {setting.type === "bool" ? (
+          <input
+            type="checkbox"
+            checked={draft === "true"}
+            disabled={saving}
+            onChange={(e) => handleBoolToggle(e.target.checked)}
+            style={{ cursor: saving ? "wait" : "pointer", accentColor: "var(--blue)" }}
+          />
+        ) : (
+          <input
+            type="number"
+            value={draft}
+            min={setting.min ?? undefined}
+            max={setting.max ?? undefined}
+            step={setting.type === "int" ? 1 : "any"}
+            disabled={saving}
+            onChange={(e) => { setDraft(e.target.value); setDirty(true); }}
+            onKeyDown={(e) => { if (e.key === "Enter" && dirty) handleSave(); }}
+            style={{
+              background: "var(--bg)",
+              border: `1px solid ${dirty ? "var(--blue)" : "var(--border)"}`,
+              borderRadius: 4,
+              color: "var(--text)",
+              padding: "2px 6px",
+              width: 130,
+              fontFamily: "inherit",
+              fontSize: 12,
+            }}
+          />
+        )}
+      </td>
+      <td style={{ whiteSpace: "nowrap" }}>
+        {dirty && (
+          <button
+            onClick={handleSave}
+            disabled={saving}
+            style={{ ...btnBase, color: "var(--blue)", border: "1px solid rgba(88,166,255,0.3)" }}
+          >
+            {saving ? "…" : "save"}
+          </button>
+        )}
+        {setting.override !== null && !dirty && (
+          <button
+            onClick={handleReset}
+            disabled={saving}
+            style={{ ...btnBase, color: "var(--text-muted)", border: "1px solid var(--border)" }}
+          >
+            reset
+          </button>
+        )}
+        {flash && (
+          <span className={flash.ok ? "positive" : "negative"} style={{ marginLeft: 8, fontSize: 11 }}>
+            {flash.text}
+          </span>
+        )}
+      </td>
+    </tr>
+  );
+}
+
+function SettingsTab() {
+  const [settings, setSettings] = useState<SettingRow[] | null>(null);
+  const [error, setError] = useState<string | null>(null);
+  const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/settings");
+      const json = (await res.json()) as { settings: SettingRow[] };
+      setSettings(json.settings);
+      setLastUpdate(new Date());
+      setError(null);
+    } catch (e) {
+      setError(String(e));
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  if (error) {
+    return (
+      <div style={{ background: "rgba(248,81,73,0.1)", border: "1px solid var(--red)", borderRadius: 8, padding: "10px 14px", color: "var(--red)" }}>
+        {error}
+      </div>
+    );
+  }
+  if (!settings) return <p className="neutral">Loading settings…</p>;
+
+  const settingsMap = Object.fromEntries(settings.map((s) => [s.key, s]));
+  const lockedSettings = settings.filter((s) => s.locked);
+
+  return (
+    <>
+      <div style={{ color: "var(--text-muted)", fontSize: 11, marginBottom: 16 }}>
+        {lastUpdate ? <>last refreshed: {lastUpdate.toLocaleTimeString("pt-BR")} · </> : null}
+        polls every {POLL_MS / 1000}s · changes take effect on the next bot cycle
+      </div>
+
+      {SETTING_GROUPS.map((group) => {
+        const rows = group.keys.map((k) => settingsMap[k]).filter(Boolean) as SettingRow[];
+        if (rows.length === 0) return null;
+        return (
+          <Section key={group.label} title={group.label}>
+            <table>
+              <thead>
+                <tr>
+                  <th style={{ width: "42%" }}>Key</th>
+                  <th>Type</th>
+                  <th>Range</th>
+                  <th>Value</th>
+                  <th></th>
+                </tr>
+              </thead>
+              <tbody>
+                {rows.map((s) => (
+                  <EditableRow key={s.key} setting={s} onRefresh={load} />
+                ))}
+              </tbody>
+            </table>
+          </Section>
+        );
+      })}
+
+      <Section title="Execution & Risk — locked">
+        <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 11, borderBottom: "1px solid var(--border)" }}>
+          Cannot be changed from the UI. Edit .env and restart the bot to modify these.
+        </div>
+        <table>
+          <thead>
+            <tr>
+              <th style={{ width: "42%" }}>Key</th>
+              <th>Type</th>
+              <th>Value</th>
+              <th>Status</th>
+            </tr>
+          </thead>
+          <tbody>
+            {lockedSettings.map((s) => (
+              <LockedRow key={s.key} setting={s} />
+            ))}
+          </tbody>
+        </table>
+      </Section>
+    </>
+  );
+}
+
 // ─── App ─────────────────────────────────────────────────────────────────────
 
 export default function Dashboard() {
   const [data, setData] = useState<DashData | null>(null);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
   const [error, setError] = useState<string | null>(null);
+  const [activeTab, setActiveTab] = useState<TabId>("dashboard");
 
   const load = useCallback(async () => {
     try {
@@ -480,12 +793,27 @@ export default function Dashboard() {
     return () => clearInterval(id);
   }, [load]);
 
+  const tabBtnStyle = (tab: TabId): React.CSSProperties => ({
+    padding: "4px 14px",
+    borderRadius: 6,
+    fontSize: 12,
+    cursor: "pointer",
+    fontFamily: "inherit",
+    background: activeTab === tab ? "var(--surface)" : "transparent",
+    border: `1px solid ${activeTab === tab ? "var(--border)" : "transparent"}`,
+    color: activeTab === tab ? "var(--text)" : "var(--text-muted)",
+  });
+
   return (
     <div style={{ maxWidth: 1200, margin: "0 auto", padding: "24px 20px" }}>
       {/* Header */}
-      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 16, marginBottom: 24 }}>
         <h1>Soros</h1>
-        <div style={{ color: "var(--text-muted)", fontSize: 11 }}>
+        <div style={{ display: "flex", gap: 4 }}>
+          <button style={tabBtnStyle("dashboard")} onClick={() => setActiveTab("dashboard")}>Dashboard</button>
+          <button style={tabBtnStyle("settings")} onClick={() => setActiveTab("settings")}>Settings</button>
+        </div>
+        <div style={{ marginLeft: "auto", color: "var(--text-muted)", fontSize: 11 }}>
           {lastUpdate ? <>last update: {lastUpdate.toLocaleTimeString("pt-BR")}{" · "}</> : null}
           polls every {POLL_MS / 1000}s
         </div>
@@ -497,7 +825,9 @@ export default function Dashboard() {
         </div>
       )}
 
-      {!data ? (
+      {activeTab === "settings" ? (
+        <SettingsTab />
+      ) : !data ? (
         <p className="neutral">Loading…</p>
       ) : data.empty ? (
         <div style={{ background: "var(--surface)", border: "1px solid var(--border)", borderRadius: 8, padding: "40px 20px", textAlign: "center" }}>
