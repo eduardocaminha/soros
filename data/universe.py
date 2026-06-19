@@ -13,6 +13,7 @@ import urllib.request
 from typing import Any
 
 import config
+from data.binance_symbols import get_tradeable_symbols
 from database.db import get_logger
 
 _log = get_logger(__name__)
@@ -38,20 +39,30 @@ _cache_ts: float = 0.0
 
 
 def _fetch_from_api(n: int) -> list[str]:
-    """Call CoinGecko and return up to *n* ccxt USDT-pair symbols."""
-    # Fetch extra rows to cover filtered-out stablecoins/wrapped assets.
-    per_page = min(n * 3, 250)
+    """Call CoinGecko and return up to *n* ccxt USDT-pair symbols.
+
+    Fetches a larger page (5× n, capped at 250) so that after filtering out
+    stablecoins, wrapped assets, and symbols not listed on Binance spot, we
+    can still fill *n* slots.
+    """
+    per_page = min(n * 5, 250)
     url = _COINGECKO_URL.format(per_page=per_page)
     req = urllib.request.Request(url, headers={"Accept": "application/json"})
     with urllib.request.urlopen(req, timeout=15) as resp:
         data: list[dict[str, Any]] = json.loads(resp.read())
+
+    tradeable = get_tradeable_symbols()  # frozenset | None (None = filter unavailable)
 
     symbols: list[str] = []
     for coin in data:
         ticker = (coin.get("symbol") or "").upper()
         if ticker in _EXCLUDE:
             continue
-        symbols.append(f"{ticker}/USDT")
+        sym = f"{ticker}/USDT"
+        if tradeable is not None and sym not in tradeable:
+            _log.debug("skipping %s — not listed on Binance spot", sym)
+            continue
+        symbols.append(sym)
         if len(symbols) >= n:
             break
     return symbols
