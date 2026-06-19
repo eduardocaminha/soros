@@ -147,3 +147,95 @@ class TestValidateConfig:
         msg = str(exc_info.value)
         assert "BINANCE" in msg
         assert "ALPACA" in msg
+
+
+class TestWatchlistAndScreener:
+    def teardown_method(self):
+        for key in (
+            "CRYPTO_WATCHLIST",
+            "STOCK_WATCHLIST",
+            "SCREENER_ENABLED",
+            "SCREENER_TOP_N",
+            "SCREENER_MIN_VOLUME_USD",
+            "CRYPTOPANIC_API_KEY",
+            "FINNHUB_API_KEY",
+        ):
+            os.environ.pop(key, None)
+        importlib.reload(config)
+
+    def test_watchlists_default_empty(self, monkeypatch):
+        monkeypatch.delenv("CRYPTO_WATCHLIST", raising=False)
+        monkeypatch.delenv("STOCK_WATCHLIST", raising=False)
+        importlib.reload(config)
+        assert config.CRYPTO_WATCHLIST == []
+        assert config.STOCK_WATCHLIST == []
+
+    def test_crypto_watchlist_parsed_from_env(self, monkeypatch):
+        monkeypatch.setenv("CRYPTO_WATCHLIST", "DOGE/USDT, ADA/USDT, AVAX/USDT")
+        importlib.reload(config)
+        assert config.CRYPTO_WATCHLIST == ["DOGE/USDT", "ADA/USDT", "AVAX/USDT"]
+
+    def test_stock_watchlist_parsed_from_env(self, monkeypatch):
+        monkeypatch.setenv("STOCK_WATCHLIST", "TSLA,AMZN,GOOG")
+        importlib.reload(config)
+        assert config.STOCK_WATCHLIST == ["TSLA", "AMZN", "GOOG"]
+
+    def test_screener_enabled_default_false(self, monkeypatch):
+        monkeypatch.delenv("SCREENER_ENABLED", raising=False)
+        importlib.reload(config)
+        assert config.SCREENER_ENABLED is False
+
+    def test_screener_enabled_true_from_env(self, monkeypatch):
+        monkeypatch.setenv("SCREENER_ENABLED", "true")
+        importlib.reload(config)
+        assert config.SCREENER_ENABLED is True
+
+    def test_screener_enabled_case_insensitive(self, monkeypatch):
+        monkeypatch.setenv("SCREENER_ENABLED", "TRUE")
+        importlib.reload(config)
+        assert config.SCREENER_ENABLED is True
+
+    def test_screener_top_n_default(self, monkeypatch):
+        monkeypatch.delenv("SCREENER_TOP_N", raising=False)
+        importlib.reload(config)
+        assert config.SCREENER_TOP_N == 3
+
+    def test_screener_top_n_from_env(self, monkeypatch):
+        monkeypatch.setenv("SCREENER_TOP_N", "5")
+        importlib.reload(config)
+        assert config.SCREENER_TOP_N == 5
+
+    def test_screener_min_volume_default(self, monkeypatch):
+        monkeypatch.delenv("SCREENER_MIN_VOLUME_USD", raising=False)
+        importlib.reload(config)
+        assert config.SCREENER_MIN_VOLUME_USD == 1_000_000.0
+
+    def test_screener_min_volume_from_env(self, monkeypatch):
+        monkeypatch.setenv("SCREENER_MIN_VOLUME_USD", "500000")
+        importlib.reload(config)
+        assert config.SCREENER_MIN_VOLUME_USD == 500_000.0
+
+    def test_cryptopanic_key_default_empty(self, monkeypatch):
+        monkeypatch.delenv("CRYPTOPANIC_API_KEY", raising=False)
+        importlib.reload(config)
+        assert config.CRYPTOPANIC_API_KEY == ""
+
+    def test_cryptopanic_key_from_env(self, monkeypatch):
+        monkeypatch.setenv("CRYPTOPANIC_API_KEY", "abc123")
+        importlib.reload(config)
+        assert config.CRYPTOPANIC_API_KEY == "abc123"
+
+    def test_finnhub_key_default_empty(self, monkeypatch):
+        monkeypatch.delenv("FINNHUB_API_KEY", raising=False)
+        importlib.reload(config)
+        assert config.FINNHUB_API_KEY == ""
+
+    def test_finnhub_key_from_env(self, monkeypatch):
+        monkeypatch.setenv("FINNHUB_API_KEY", "xyz789")
+        importlib.reload(config)
+        assert config.FINNHUB_API_KEY == "xyz789"
+
+    def test_watchlist_empty_string_excluded(self, monkeypatch):
+        monkeypatch.setenv("CRYPTO_WATCHLIST", "BTC/USDT,,ETH/USDT,")
+        importlib.reload(config)
+        assert config.CRYPTO_WATCHLIST == ["BTC/USDT", "ETH/USDT"]
