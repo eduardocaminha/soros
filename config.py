@@ -115,6 +115,9 @@ FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "")
 
 OHLCV_TIMEFRAME: str = "1h"  # ccxt-compatible timeframe string
 OHLCV_LIMIT: int = 200  # candles fetched per call (enough for all signal windows)
+# Shorter candle window for watchlist-only symbols — enough for signals (≥26 bars)
+# without the overhead of the full pinned history.
+WATCHLIST_OHLCV_LIMIT: int = int(os.environ.get("WATCHLIST_OHLCV_LIMIT", "50"))
 
 # How often the main loop ticks (seconds)
 LOOP_INTERVAL_SECONDS: int = int(os.environ.get("LOOP_INTERVAL_SECONDS", "3600"))

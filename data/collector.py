@@ -80,40 +80,63 @@ def _upsert_candles(
     return inserted
 
 
-def collect_once(symbols: list[str] | None = None) -> dict[str, int]:
-    """Fetch OHLCV + funding rates for each crypto symbol and persist to prices.
+def _collect_symbol(
+    spot: ccxt.binance,
+    futures: ccxt.binance,
+    symbol: str,
+    limit: int,
+) -> int:
+    """Collect OHLCV + funding for one symbol. Returns inserted row count (0 on error)."""
+    try:
+        _log.info("collecting OHLCV for %s (limit=%d)", symbol, limit)
+        candles = spot.fetch_ohlcv(symbol, timeframe=config.OHLCV_TIMEFRAME, limit=limit)
+        funding_rate = _fetch_funding_rate(futures, symbol)
+        count = _upsert_candles(symbol, candles, funding_rate)
+        _log.info(
+            "inserted %d new candles for %s (funding_rate=%s)",
+            count,
+            symbol,
+            funding_rate,
+        )
+        return count
+    except Exception as exc:
+        _log.error("collection failed for %s: %s", symbol, exc, exc_info=True)
+        return 0
+
+
+def collect_once(
+    symbols: list[str] | None = None,
+    watchlist: list[str] | None = None,
+) -> dict[str, int]:
+    """Fetch OHLCV + funding rates for the universe (pinned ∪ watchlist).
+
+    Pinned symbols (``symbols``) are fetched with the full ``OHLCV_LIMIT`` window.
+    Watchlist-only candidates (``watchlist``) are fetched with the shorter
+    ``WATCHLIST_OHLCV_LIMIT`` window to reduce collection overhead.  Symbols
+    present in both lists are treated as pinned (full window, collected once).
 
     Args:
-        symbols: override the symbol list; defaults to config.CRYPTO_SYMBOLS.
+        symbols: Pinned symbols; defaults to config.CRYPTO_SYMBOLS.
+        watchlist: Additional candidate symbols; defaults to config.CRYPTO_WATCHLIST.
 
     Returns:
         Mapping of symbol → number of newly inserted candle rows.
     """
-    symbols = symbols or config.CRYPTO_SYMBOLS
+    pinned = symbols if symbols is not None else config.CRYPTO_SYMBOLS
+    candidates = watchlist if watchlist is not None else config.CRYPTO_WATCHLIST
+
+    pinned_set = set(pinned)
+    watchlist_only = [s for s in candidates if s not in pinned_set]
+
     spot = _make_exchange("spot")
     futures = _make_exchange("future")
     results: dict[str, int] = {}
 
-    for symbol in symbols:
-        try:
-            _log.info("collecting OHLCV for %s", symbol)
-            candles = spot.fetch_ohlcv(
-                symbol,
-                timeframe=config.OHLCV_TIMEFRAME,
-                limit=config.OHLCV_LIMIT,
-            )
-            funding_rate = _fetch_funding_rate(futures, symbol)
-            count = _upsert_candles(symbol, candles, funding_rate)
-            _log.info(
-                "inserted %d new candles for %s (funding_rate=%s)",
-                count,
-                symbol,
-                funding_rate,
-            )
-            results[symbol] = count
-        except Exception as exc:
-            _log.error("collection failed for %s: %s", symbol, exc, exc_info=True)
-            results[symbol] = 0
+    for symbol in pinned:
+        results[symbol] = _collect_symbol(spot, futures, symbol, config.OHLCV_LIMIT)
+
+    for symbol in watchlist_only:
+        results[symbol] = _collect_symbol(spot, futures, symbol, config.WATCHLIST_OHLCV_LIMIT)
 
     return results
 

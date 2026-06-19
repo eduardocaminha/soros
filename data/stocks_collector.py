@@ -98,14 +98,14 @@ def _yfinance_period(limit: int, tf: str) -> str:
 # Alpaca v2 data API
 # ---------------------------------------------------------------------------
 
-def _fetch_alpaca_bars(symbol: str) -> list[dict[str, Any]] | None:
+def _fetch_alpaca_bars(symbol: str, limit: int | None = None) -> list[dict[str, Any]] | None:
     """GET /v2/stocks/{symbol}/bars from Alpaca. Returns list of bar dicts or None."""
     if not (config.ALPACA_API_KEY and config.ALPACA_SECRET):
         return None
 
     params = {
         "timeframe": _alpaca_timeframe(config.OHLCV_TIMEFRAME),
-        "limit": config.OHLCV_LIMIT,
+        "limit": limit if limit is not None else config.OHLCV_LIMIT,
         "adjustment": "raw",
         "feed": "iex",
     }
@@ -150,6 +150,7 @@ def _alpaca_bars_to_candles(
 
 def _fetch_yfinance_bars(
     symbol: str,
+    limit: int | None = None,
 ) -> list[tuple[int, float, float, float, float, float]] | None:
     """Download bars from yfinance. Returns (ts, o, h, l, c, v) tuples or None."""
     try:
@@ -158,8 +159,9 @@ def _fetch_yfinance_bars(
         _log.warning("yfinance not installed; cannot collect %s", symbol)
         return None
 
+    effective_limit = limit if limit is not None else config.OHLCV_LIMIT
     interval = _yfinance_interval(config.OHLCV_TIMEFRAME)
-    period = _yfinance_period(config.OHLCV_LIMIT, config.OHLCV_TIMEFRAME)
+    period = _yfinance_period(effective_limit, config.OHLCV_TIMEFRAME)
 
     try:
         ticker = yf.Ticker(symbol)
@@ -167,7 +169,7 @@ def _fetch_yfinance_bars(
         if hist.empty:
             _log.warning("yfinance returned no data for %s", symbol)
             return None
-        hist = hist.tail(config.OHLCV_LIMIT)
+        hist = hist.tail(effective_limit)
         result: list[tuple[int, float, float, float, float, float]] = []
         for idx, row in hist.iterrows():
             ts = int(idx.timestamp())
@@ -215,46 +217,67 @@ def _upsert_candles(
 # Public interface
 # ---------------------------------------------------------------------------
 
-def collect_once(symbols: list[str] | None = None) -> dict[str, int]:
-    """Fetch OHLCV for each stock symbol and persist to prices.
+def _collect_symbol(symbol: str, limit: int) -> int:
+    """Collect OHLCV for one stock symbol. Returns inserted row count (0 on error)."""
+    try:
+        _log.info("collecting OHLCV for %s (limit=%d)", symbol, limit)
+        candles: list[tuple[int, float, float, float, float, float]] | None = None
 
-    Tries Alpaca first; falls back to yfinance if Alpaca credentials are
-    absent or the call fails for a given symbol.
+        bars = _fetch_alpaca_bars(symbol, limit)
+        if bars is not None:
+            candles = _alpaca_bars_to_candles(bars)
+
+        if not candles:
+            _log.info("falling back to yfinance for %s", symbol)
+            candles = _fetch_yfinance_bars(symbol, limit)
+
+        if not candles:
+            _log.warning("no data collected for %s", symbol)
+            return 0
+
+        count = _upsert_candles(symbol, candles)
+        _log.info("inserted %d new candles for %s", count, symbol)
+        return count
+
+    except Exception as exc:
+        _log.error("collection failed for %s: %s", symbol, exc, exc_info=True)
+        return 0
+
+
+def collect_once(
+    symbols: list[str] | None = None,
+    watchlist: list[str] | None = None,
+) -> dict[str, int]:
+    """Fetch OHLCV for the universe (pinned ∪ watchlist) and persist to prices.
+
+    Tries Alpaca first for each symbol; falls back to yfinance when Alpaca
+    credentials are absent or the call fails.
+
+    Pinned symbols (``symbols``) use the full ``OHLCV_LIMIT`` window.
+    Watchlist-only candidates (``watchlist``) use the shorter
+    ``WATCHLIST_OHLCV_LIMIT`` window.  Symbols in both lists are treated as
+    pinned (full window, collected once).
 
     Args:
-        symbols: override the symbol list; defaults to config.STOCK_SYMBOLS.
+        symbols: Pinned symbols; defaults to config.STOCK_SYMBOLS.
+        watchlist: Additional candidate symbols; defaults to config.STOCK_WATCHLIST.
 
     Returns:
         Mapping of symbol → number of newly inserted candle rows.
     """
-    symbols = symbols or config.STOCK_SYMBOLS
+    pinned = symbols if symbols is not None else config.STOCK_SYMBOLS
+    candidates = watchlist if watchlist is not None else config.STOCK_WATCHLIST
+
+    pinned_set = set(pinned)
+    watchlist_only = [s for s in candidates if s not in pinned_set]
+
     results: dict[str, int] = {}
 
-    for symbol in symbols:
-        try:
-            _log.info("collecting OHLCV for %s", symbol)
-            candles: list[tuple[int, float, float, float, float, float]] | None = None
+    for symbol in pinned:
+        results[symbol] = _collect_symbol(symbol, config.OHLCV_LIMIT)
 
-            bars = _fetch_alpaca_bars(symbol)
-            if bars is not None:
-                candles = _alpaca_bars_to_candles(bars)
-
-            if not candles:
-                _log.info("falling back to yfinance for %s", symbol)
-                candles = _fetch_yfinance_bars(symbol)
-
-            if not candles:
-                _log.warning("no data collected for %s", symbol)
-                results[symbol] = 0
-                continue
-
-            count = _upsert_candles(symbol, candles)
-            _log.info("inserted %d new candles for %s", count, symbol)
-            results[symbol] = count
-
-        except Exception as exc:
-            _log.error("collection failed for %s: %s", symbol, exc, exc_info=True)
-            results[symbol] = 0
+    for symbol in watchlist_only:
+        results[symbol] = _collect_symbol(symbol, config.WATCHLIST_OHLCV_LIMIT)
 
     return results
 
