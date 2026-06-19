@@ -82,6 +82,14 @@ class Database:
             conn.execute("ALTER TABLE positions ADD COLUMN trailing_peak_price REAL")
             conn.commit()
 
+        sweep_cols = {row[1] for row in conn.execute("PRAGMA table_info(sweep_results)")}
+        if "param_name" not in sweep_cols:
+            conn.execute(
+                "ALTER TABLE sweep_results ADD COLUMN"
+                " param_name TEXT NOT NULL DEFAULT 'signal_threshold'"
+            )
+            conn.commit()
+
         tables = {row[0] for row in conn.execute("SELECT name FROM sqlite_master WHERE type='table'")}
         if "settings" not in tables:
             conn.execute(
