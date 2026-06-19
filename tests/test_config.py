@@ -228,3 +228,135 @@ class TestWatchlistAndScreener:
         monkeypatch.setenv("CRYPTO_WATCHLIST", "BTC/USDT,,ETH/USDT,")
         importlib.reload(config)
         assert config.CRYPTO_WATCHLIST == ["BTC/USDT", "ETH/USDT"]
+
+
+class TestCryptoSymbolsOptionalOverride:
+    def teardown_method(self):
+        os.environ.pop("CRYPTO_SYMBOLS", None)
+        importlib.reload(config)
+
+    def test_crypto_symbols_default_empty(self, monkeypatch):
+        monkeypatch.delenv("CRYPTO_SYMBOLS", raising=False)
+        importlib.reload(config)
+        assert config.CRYPTO_SYMBOLS == []
+
+    def test_crypto_symbols_override_from_env(self, monkeypatch):
+        monkeypatch.setenv("CRYPTO_SYMBOLS", "BTC/USDT,ETH/USDT")
+        importlib.reload(config)
+        assert config.CRYPTO_SYMBOLS == ["BTC/USDT", "ETH/USDT"]
+
+    def test_crypto_symbols_strips_whitespace(self, monkeypatch):
+        monkeypatch.setenv("CRYPTO_SYMBOLS", " BTC/USDT , SOL/USDT ")
+        importlib.reload(config)
+        assert config.CRYPTO_SYMBOLS == ["BTC/USDT", "SOL/USDT"]
+
+    def test_crypto_symbols_filters_empty_entries(self, monkeypatch):
+        monkeypatch.setenv("CRYPTO_SYMBOLS", "BTC/USDT,,ETH/USDT,")
+        importlib.reload(config)
+        assert config.CRYPTO_SYMBOLS == ["BTC/USDT", "ETH/USDT"]
+
+
+class TestAutonomousUniverseConfig:
+    def teardown_method(self):
+        for key in (
+            "MARKETCAP_TOP_N",
+            "MARKETCAP_REFRESH_SECS",
+            "GEM_VOLUME_SURGE_MULTIPLIER",
+            "GEM_ROC_MIN_PCT",
+            "GEM_TOP_N",
+            "GEM_MIN_VOLUME_USD",
+            "IGNITION_WEIGHT",
+            "GEM_TRAILING_STOP_PCT",
+        ):
+            os.environ.pop(key, None)
+        importlib.reload(config)
+
+    def test_marketcap_top_n_default(self, monkeypatch):
+        monkeypatch.delenv("MARKETCAP_TOP_N", raising=False)
+        importlib.reload(config)
+        assert config.MARKETCAP_TOP_N == 20
+
+    def test_marketcap_top_n_from_env(self, monkeypatch):
+        monkeypatch.setenv("MARKETCAP_TOP_N", "50")
+        importlib.reload(config)
+        assert config.MARKETCAP_TOP_N == 50
+
+    def test_marketcap_refresh_secs_default(self, monkeypatch):
+        monkeypatch.delenv("MARKETCAP_REFRESH_SECS", raising=False)
+        importlib.reload(config)
+        assert config.MARKETCAP_REFRESH_SECS == 3600
+
+    def test_marketcap_refresh_secs_from_env(self, monkeypatch):
+        monkeypatch.setenv("MARKETCAP_REFRESH_SECS", "1800")
+        importlib.reload(config)
+        assert config.MARKETCAP_REFRESH_SECS == 1800
+
+    def test_gem_volume_surge_multiplier_default(self, monkeypatch):
+        monkeypatch.delenv("GEM_VOLUME_SURGE_MULTIPLIER", raising=False)
+        importlib.reload(config)
+        assert config.GEM_VOLUME_SURGE_MULTIPLIER == 2.0
+
+    def test_gem_volume_surge_multiplier_from_env(self, monkeypatch):
+        monkeypatch.setenv("GEM_VOLUME_SURGE_MULTIPLIER", "3.5")
+        importlib.reload(config)
+        assert config.GEM_VOLUME_SURGE_MULTIPLIER == 3.5
+
+    def test_gem_roc_min_pct_default(self, monkeypatch):
+        monkeypatch.delenv("GEM_ROC_MIN_PCT", raising=False)
+        importlib.reload(config)
+        assert config.GEM_ROC_MIN_PCT == 3.0
+
+    def test_gem_roc_min_pct_from_env(self, monkeypatch):
+        monkeypatch.setenv("GEM_ROC_MIN_PCT", "5.0")
+        importlib.reload(config)
+        assert config.GEM_ROC_MIN_PCT == 5.0
+
+    def test_gem_top_n_default(self, monkeypatch):
+        monkeypatch.delenv("GEM_TOP_N", raising=False)
+        importlib.reload(config)
+        assert config.GEM_TOP_N == 5
+
+    def test_gem_top_n_from_env(self, monkeypatch):
+        monkeypatch.setenv("GEM_TOP_N", "10")
+        importlib.reload(config)
+        assert config.GEM_TOP_N == 10
+
+    def test_gem_min_volume_usd_default(self, monkeypatch):
+        monkeypatch.delenv("GEM_MIN_VOLUME_USD", raising=False)
+        importlib.reload(config)
+        assert config.GEM_MIN_VOLUME_USD == 500_000.0
+
+    def test_gem_min_volume_usd_from_env(self, monkeypatch):
+        monkeypatch.setenv("GEM_MIN_VOLUME_USD", "1000000")
+        importlib.reload(config)
+        assert config.GEM_MIN_VOLUME_USD == 1_000_000.0
+
+    def test_ignition_weight_default(self, monkeypatch):
+        monkeypatch.delenv("IGNITION_WEIGHT", raising=False)
+        importlib.reload(config)
+        assert config.IGNITION_WEIGHT == 0.15
+
+    def test_ignition_weight_from_env(self, monkeypatch):
+        monkeypatch.setenv("IGNITION_WEIGHT", "0.20")
+        importlib.reload(config)
+        assert config.IGNITION_WEIGHT == 0.20
+
+    def test_ignition_weight_zero_disables(self, monkeypatch):
+        monkeypatch.setenv("IGNITION_WEIGHT", "0.0")
+        importlib.reload(config)
+        assert config.IGNITION_WEIGHT == 0.0
+
+    def test_gem_trailing_stop_pct_default(self, monkeypatch):
+        monkeypatch.delenv("GEM_TRAILING_STOP_PCT", raising=False)
+        importlib.reload(config)
+        assert config.GEM_TRAILING_STOP_PCT == 0.05
+
+    def test_gem_trailing_stop_pct_from_env(self, monkeypatch):
+        monkeypatch.setenv("GEM_TRAILING_STOP_PCT", "0.08")
+        importlib.reload(config)
+        assert config.GEM_TRAILING_STOP_PCT == 0.08
+
+    def test_gem_trailing_stop_pct_zero_disables(self, monkeypatch):
+        monkeypatch.setenv("GEM_TRAILING_STOP_PCT", "0.0")
+        importlib.reload(config)
+        assert config.GEM_TRAILING_STOP_PCT == 0.0

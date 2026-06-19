@@ -42,14 +42,32 @@ cp .env.example .env
 | `STOCKS_LIVE` | `false` | Executa ordens reais na Alpaca. Exige 48h+ de paper trading validado. |
 | `SENTIMENT_ENABLED` | `false` | Ativa o runner de sentimento. Exige acesso a subscricao Claude. |
 
-### Simbolos e universo
+### Simbolos e universo autonomo
 
 | Variavel | Default | Descricao |
 |---|---|---|
-| `CRYPTO_SYMBOLS` | `BTC/USDT,ETH/USDT,SOL/USDT` | Simbolos cripto pinned — sempre operados. |
+| `CRYPTO_SYMBOLS` | _(vazio)_ | Override opcional: simbolos cripto sempre incluidos alem do universo autonomo. Vazio = universo 100% por regra (market cap + gems). |
 | `STOCK_SYMBOLS` | _(vazio)_ | Simbolos de acoes pinned. Vazio = cripto-only; preencha para operar acoes. |
 | `CRYPTO_WATCHLIST` | _(vazio)_ | Candidatos cripto adicionais avaliados pelo screener. |
 | `STOCK_WATCHLIST` | _(vazio)_ | Candidatos de acoes adicionais avaliados pelo screener. |
+
+### Universo autonomo — base por market cap
+
+| Variavel | Default | Descricao |
+|---|---|---|
+| `MARKETCAP_TOP_N` | `20` | Numero de moedas top-N por market cap (CoinGecko, keyless). |
+| `MARKETCAP_REFRESH_SECS` | `3600` | Intervalo (segundos) de refresh da lista de market cap. |
+
+### Gem scanner — candidatos de ignicao
+
+| Variavel | Default | Descricao |
+|---|---|---|
+| `GEM_VOLUME_SURGE_MULTIPLIER` | `2.0` | Multiplicador minimo de volume sobre a media para qualificar como gem. |
+| `GEM_ROC_MIN_PCT` | `3.0` | Rate-of-change minimo (%) na janela curta para qualificar. |
+| `GEM_TOP_N` | `5` | Maximo de gems surfacados por ciclo. |
+| `GEM_MIN_VOLUME_USD` | `500000` | Piso de liquidez (USD 24h) para candidatos gem. |
+| `IGNITION_WEIGHT` | `0.15` | Peso do sinal de ignicao no composite (0.0 = desabilitado). |
+| `GEM_TRAILING_STOP_PCT` | `0.05` | Trailing stop para posicoes gem (fracao, ex: 0.05 = 5%). 0.0 = desabilitado. |
 
 ### Screener
 

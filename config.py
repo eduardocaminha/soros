@@ -53,12 +53,12 @@ SENTIMENT_ENABLED: bool = (
 # Symbols to trade
 # ---------------------------------------------------------------------------
 
-# Pinned symbols — always included in every cycle.
+# Optional override: when set, these symbols are always included alongside the
+# autonomous market-cap base tier.  Leave empty (default) to let the universe
+# be fully determined by MARKETCAP_TOP_N + gem scanner.
 CRYPTO_SYMBOLS: list[str] = [
     symbol.strip()
-    for symbol in os.environ.get(
-        "CRYPTO_SYMBOLS", "BTC/USDT,ETH/USDT,SOL/USDT"
-    ).split(",")
+    for symbol in os.environ.get("CRYPTO_SYMBOLS", "").split(",")
     if symbol.strip()
 ]
 
@@ -102,6 +102,53 @@ SCREENER_TOP_N: int = int(os.environ.get("SCREENER_TOP_N", "3"))
 # Conservative default; tune per exchange.
 SCREENER_MIN_VOLUME_USD: float = float(
     os.environ.get("SCREENER_MIN_VOLUME_USD", "1000000")
+)
+
+# ---------------------------------------------------------------------------
+# Autonomous universe — market cap base tier (CoinGecko, keyless)
+# ---------------------------------------------------------------------------
+
+# Number of top-N coins by market cap included in the base universe.
+MARKETCAP_TOP_N: int = int(os.environ.get("MARKETCAP_TOP_N", "20"))
+
+# How often (seconds) the market cap top-N list is refreshed from CoinGecko.
+MARKETCAP_REFRESH_SECS: int = int(os.environ.get("MARKETCAP_REFRESH_SECS", "3600"))
+
+# ---------------------------------------------------------------------------
+# Gem scanner — ignition candidates (CEX via ccxt.fetch_tickers)
+# ---------------------------------------------------------------------------
+
+# Volume surge multiplier: a symbol must show >= this multiple of its rolling
+# average volume to qualify as a gem candidate (plan: >=2x).
+GEM_VOLUME_SURGE_MULTIPLIER: float = float(
+    os.environ.get("GEM_VOLUME_SURGE_MULTIPLIER", "2.0")
+)
+
+# Minimum price rate-of-change (%) over the short window for gem qualification.
+GEM_ROC_MIN_PCT: float = float(os.environ.get("GEM_ROC_MIN_PCT", "3.0"))
+
+# Maximum number of gem candidates surfaced by the scanner per cycle.
+GEM_TOP_N: int = int(os.environ.get("GEM_TOP_N", "5"))
+
+# Minimum 24 h notional volume (USD) a gem candidate must meet (liquidity floor).
+GEM_MIN_VOLUME_USD: float = float(os.environ.get("GEM_MIN_VOLUME_USD", "500000"))
+
+# ---------------------------------------------------------------------------
+# Ignition signal weight
+# Used by the signal aggregator when the ignition signal is active.
+# Set to 0.0 to disable the ignition signal entirely.
+# ---------------------------------------------------------------------------
+
+IGNITION_WEIGHT: float = float(os.environ.get("IGNITION_WEIGHT", "0.15"))
+
+# ---------------------------------------------------------------------------
+# Gem risk — trailing stop
+# ---------------------------------------------------------------------------
+
+# Trailing stop distance (fraction, e.g. 0.05 = 5 %) for gem-origin positions.
+# Set to 0.0 to disable trailing stops for gems.
+GEM_TRAILING_STOP_PCT: float = float(
+    os.environ.get("GEM_TRAILING_STOP_PCT", "0.05")
 )
 
 # ---------------------------------------------------------------------------
