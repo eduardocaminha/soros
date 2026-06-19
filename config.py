@@ -53,6 +53,7 @@ SENTIMENT_ENABLED: bool = (
 # Symbols to trade
 # ---------------------------------------------------------------------------
 
+# Pinned symbols — always included in every cycle.
 CRYPTO_SYMBOLS: list[str] = [
     symbol.strip()
     for symbol in os.environ.get(
@@ -66,6 +67,47 @@ STOCK_SYMBOLS: list[str] = [
     for symbol in os.environ.get("STOCK_SYMBOLS", "AAPL,MSFT,NVDA").split(",")
     if symbol.strip()
 ]
+
+# Watchlist — additional candidates considered by the screener.
+# Empty by default; only used when SCREENER_ENABLED=true.
+CRYPTO_WATCHLIST: list[str] = [
+    symbol.strip()
+    for symbol in os.environ.get("CRYPTO_WATCHLIST", "").split(",")
+    if symbol.strip()
+]
+
+STOCK_WATCHLIST: list[str] = [
+    symbol.strip()
+    for symbol in os.environ.get("STOCK_WATCHLIST", "").split(",")
+    if symbol.strip()
+]
+
+# ---------------------------------------------------------------------------
+# Screener
+# ---------------------------------------------------------------------------
+
+# When False (default): only pinned symbols are operated; watchlist is ignored.
+# When True: screener ranks pinned ∪ watchlist and selects top-N candidates.
+SCREENER_ENABLED: bool = (
+    os.environ.get("SCREENER_ENABLED", "false").lower() == "true"
+)
+
+# Maximum number of screener-selected symbols (excluding pinned, which are
+# always included).  Hard-capped at MAX_OPEN_POSITIONS.
+SCREENER_TOP_N: int = int(os.environ.get("SCREENER_TOP_N", "3"))
+
+# Minimum 24 h notional volume (USD) a symbol must show to qualify.
+# Conservative default; tune per exchange.
+SCREENER_MIN_VOLUME_USD: float = float(
+    os.environ.get("SCREENER_MIN_VOLUME_USD", "1000000")
+)
+
+# ---------------------------------------------------------------------------
+# Optional sentiment API keys (graceful degradation — absent = neutral score)
+# ---------------------------------------------------------------------------
+
+CRYPTOPANIC_API_KEY: str = os.environ.get("CRYPTOPANIC_API_KEY", "")
+FINNHUB_API_KEY: str = os.environ.get("FINNHUB_API_KEY", "")
 
 # ---------------------------------------------------------------------------
 # Data collection
