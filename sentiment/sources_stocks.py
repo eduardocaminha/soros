@@ -1,13 +1,18 @@
-"""Stock sentiment sources — no API key required.
+"""Stock sentiment sources — keyless always-on + optional keyed adapters.
 
-Fetches three publicly available signals for a stock symbol:
-  1. CNN Fear & Greed Index  (production.dataviz.cnn.io)
-  2. Yahoo Finance: 24 h price change, 5 d price change
-  3. Yahoo Finance: up to 5 recent news headlines
+Fetches sentiment signals for a stock symbol:
+  1. CNN Fear & Greed Index  (production.dataviz.cnn.io) — keyless
+  2. Yahoo Finance: 24 h price change, 5 d price change — keyless
+  3. Yahoo Finance: up to 5 recent news headlines — keyless
+  4. Finnhub: per-ticker news sentiment score — optional (FINNHUB_API_KEY)
 
 All network calls are best-effort.  Any individual failure populates
 that field with None / [] rather than raising, so partial data is still
-useful for the analyst.
+useful.  The keyed Finnhub source degrades to None (treated as neutral)
+when no key is present or the call fails.
+
+``pre_score()`` aggregates available numeric signals into a single [-1, 1]
+score without calling any LLM.
 """
 
 from __future__ import annotations
@@ -31,16 +36,20 @@ class StockSources:
     symbol: str       # e.g. "AAPL"
     fetched_at: int   # unix seconds
 
-    # CNN Fear & Greed Index (market-wide)
+    # CNN Fear & Greed Index (market-wide, keyless)
     fear_greed_value: int | None = None   # 0 (extreme fear) … 100 (extreme greed)
     fear_greed_label: str | None = None   # e.g. "Fear", "Extreme Greed"
 
-    # Yahoo Finance price data
+    # Yahoo Finance price data (keyless)
     price_change_24h_pct: float | None = None
     price_change_5d_pct: float | None = None
 
-    # Yahoo Finance news (max 5 headlines)
+    # Yahoo Finance news (keyless, max 5 headlines)
     news_headlines: list[str] = field(default_factory=list)
+
+    # Finnhub per-ticker news sentiment (optional — None when key absent or call fails)
+    # Range: -1.0 (very bearish) … +1.0 (very bullish)
+    finnhub_sentiment_score: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -127,15 +136,50 @@ def _fetch_yahoo_news(symbol: str) -> list[str]:
         return []
 
 
+def _fetch_finnhub_sentiment(symbol: str, api_key: str) -> float | None:
+    """Fetch per-ticker news sentiment from Finnhub (keyed).
+
+    Returns a score in [-1, 1] derived from ``bullishPercent`` minus
+    ``bearishPercent`` from the Finnhub news-sentiment endpoint, or None
+    when the call fails or yields no data.
+    """
+    url = (
+        f"https://finnhub.io/api/v1/news-sentiment"
+        f"?symbol={symbol}&token={api_key}"
+    )
+    data = _get_json(url)
+    if not isinstance(data, dict):
+        return None
+    try:
+        sentiment = data.get("sentiment") or {}
+        bullish = float(sentiment.get("bullishPercent", 0))
+        bearish = float(sentiment.get("bearishPercent", 0))
+        total = bullish + bearish
+        if total == 0:
+            return None
+        # Map to [-1, 1]: net bullish fraction
+        return max(-1.0, min(1.0, (bullish - bearish) / total))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch(symbol: str) -> StockSources:
+def fetch(symbol: str, *, finnhub_api_key: str = "") -> StockSources:
     """Fetch all sentiment sources for *symbol* (e.g. 'AAPL').
 
     Each source is fetched independently; a partial failure yields a
     partially populated ``StockSources`` rather than raising.
+
+    Parameters
+    ----------
+    symbol:
+        Stock ticker, e.g. ``'AAPL'``.
+    finnhub_api_key:
+        When non-empty, enables the Finnhub keyed source.  Absent or
+        empty key is a no-op — ``finnhub_sentiment_score`` stays None.
     """
     sources = StockSources(symbol=symbol, fetched_at=int(time.time()))
 
@@ -143,7 +187,39 @@ def fetch(symbol: str) -> StockSources:
     sources.price_change_24h_pct, sources.price_change_5d_pct = _fetch_yahoo_price(symbol)
     sources.news_headlines = _fetch_yahoo_news(symbol)
 
+    if finnhub_api_key:
+        sources.finnhub_sentiment_score = _fetch_finnhub_sentiment(symbol, finnhub_api_key)
+
     return sources
+
+
+def pre_score(sources: StockSources) -> float:
+    """Aggregate available numeric signals into a single score in [-1, 1].
+
+    No LLM call is made.  Available sources are averaged; missing sources
+    are treated as neutral (0.0) only when no numeric source is available at
+    all (fallback).  When at least one numeric source exists, only present
+    values are averaged so absent keyed sources do not dilute the signal.
+
+    Scoring:
+    - Fear & Greed: (value - 50) / 50  → [-1, 1]
+    - Price 24 h: clamped to ±10 % → [-1, 1]
+    - Finnhub sentiment: already [-1, 1]
+    """
+    scores: list[float] = []
+
+    if sources.fear_greed_value is not None:
+        scores.append((sources.fear_greed_value - 50) / 50.0)
+
+    if sources.price_change_24h_pct is not None:
+        scores.append(max(-1.0, min(1.0, sources.price_change_24h_pct / 10.0)))
+
+    if sources.finnhub_sentiment_score is not None:
+        scores.append(sources.finnhub_sentiment_score)
+
+    if not scores:
+        return 0.0
+    return max(-1.0, min(1.0, sum(scores) / len(scores)))
 
 
 def to_prompt_text(sources: StockSources) -> str:
@@ -163,6 +239,9 @@ def to_prompt_text(sources: StockSources) -> str:
     if sources.price_change_5d_pct is not None:
         sign = "+" if sources.price_change_5d_pct >= 0 else ""
         lines.append(f"- 5d price change: {sign}{sources.price_change_5d_pct:.2f}%")
+
+    if sources.finnhub_sentiment_score is not None:
+        lines.append(f"- Finnhub sentiment score: {sources.finnhub_sentiment_score:+.2f}")
 
     if sources.news_headlines:
         lines.append("- Recent headlines:")

@@ -1,13 +1,18 @@
-"""Crypto sentiment sources — no API key required.
+"""Crypto sentiment sources — keyless always-on + optional keyed adapters.
 
-Fetches three publicly available signals for a crypto symbol:
-  1. Crypto Fear & Greed Index  (alternative.me/fng)
-  2. CoinGecko: 24 h / 7 d price change, market-cap rank
-  3. CryptoCompare: up to 5 recent news headlines
+Fetches sentiment signals for a crypto symbol:
+  1. Crypto Fear & Greed Index  (alternative.me/fng) — keyless
+  2. CoinGecko: 24 h / 7 d price change, market-cap rank — keyless
+  3. CryptoCompare: up to 5 recent news headlines — keyless
+  4. CryptoPanic: per-currency news sentiment score — optional (CRYPTOPANIC_API_KEY)
 
 All network calls are best-effort.  Any individual failure populates
 that field with None / [] rather than raising, so partial data is still
-useful for the analyst.
+useful.  The keyed CryptoPanic source degrades to None (treated as neutral)
+when no key is present or the call fails.
+
+``pre_score()`` aggregates available numeric signals into a single [-1, 1]
+score without calling any LLM.
 """
 
 from __future__ import annotations
@@ -49,17 +54,21 @@ class CryptoSources:
     symbol: str       # e.g. "BTC/USDT"
     fetched_at: int   # unix seconds
 
-    # alternative.me Fear & Greed Index
+    # alternative.me Fear & Greed Index (keyless)
     fear_greed_value: int | None = None   # 0 (extreme fear) … 100 (extreme greed)
     fear_greed_label: str | None = None   # e.g. "Fear", "Extreme Greed"
 
-    # CoinGecko market data
+    # CoinGecko market data (keyless)
     price_change_24h_pct: float | None = None
     price_change_7d_pct: float | None = None
     market_cap_rank: int | None = None
 
-    # CryptoCompare news (max 5 headlines)
+    # CryptoCompare news headlines (keyless, max 5)
     news_headlines: list[str] = field(default_factory=list)
+
+    # CryptoPanic per-currency news sentiment (optional — None when key absent or call fails)
+    # Range: -1.0 (very bearish) … +1.0 (very bullish)
+    cryptopanic_score: float | None = None
 
 
 # ---------------------------------------------------------------------------
@@ -127,15 +136,59 @@ def _fetch_news(base: str) -> list[str]:
         return []
 
 
+def _fetch_cryptopanic(base: str, api_key: str) -> float | None:
+    """Fetch per-currency news sentiment from CryptoPanic (keyed).
+
+    Returns a score in [-1, 1] derived from vote tallies on recent posts,
+    or None when the call fails or yields no data.
+
+    Vote mapping: each post contributes (positive_votes - negative_votes).
+    The sum is normalised by total_votes so a single highly-voted post does
+    not dominate.
+    """
+    url = (
+        "https://cryptopanic.com/api/v1/posts/"
+        f"?auth_token={api_key}&currencies={base}&kind=news&public=true"
+    )
+    data = _get_json(url)
+    if not isinstance(data, dict):
+        return None
+    try:
+        results = data.get("results", [])
+        if not results:
+            return None
+        total_pos = 0
+        total_neg = 0
+        for post in results:
+            votes = post.get("votes") or {}
+            total_pos += int(votes.get("positive", 0))
+            total_neg += int(votes.get("negative", 0))
+        total = total_pos + total_neg
+        if total == 0:
+            return None
+        # Map to [-1, 1]: (pos - neg) / total
+        return max(-1.0, min(1.0, (total_pos - total_neg) / total))
+    except (KeyError, TypeError, ValueError, ZeroDivisionError):
+        return None
+
+
 # ---------------------------------------------------------------------------
 # Public API
 # ---------------------------------------------------------------------------
 
-def fetch(symbol: str) -> CryptoSources:
+def fetch(symbol: str, *, cryptopanic_api_key: str = "") -> CryptoSources:
     """Fetch all sentiment sources for *symbol* (e.g. 'BTC/USDT').
 
     Each source is fetched independently; a partial failure yields a
     partially populated ``CryptoSources`` rather than raising.
+
+    Parameters
+    ----------
+    symbol:
+        Trading pair, e.g. ``'BTC/USDT'``.
+    cryptopanic_api_key:
+        When non-empty, enables the CryptoPanic keyed source.  Absent or
+        empty key is a no-op — ``cryptopanic_score`` stays None.
     """
     base = _base(symbol)
     sources = CryptoSources(symbol=symbol, fetched_at=int(time.time()))
@@ -148,7 +201,39 @@ def fetch(symbol: str) -> CryptoSources:
     ) = _fetch_coingecko(base)
     sources.news_headlines = _fetch_news(base)
 
+    if cryptopanic_api_key:
+        sources.cryptopanic_score = _fetch_cryptopanic(base, cryptopanic_api_key)
+
     return sources
+
+
+def pre_score(sources: CryptoSources) -> float:
+    """Aggregate available numeric signals into a single score in [-1, 1].
+
+    No LLM call is made.  Available sources are averaged; missing sources
+    are treated as neutral (0.0) only when no numeric source is available at
+    all (fallback).  When at least one numeric source exists, only present
+    values are averaged so absent keyed sources do not dilute the signal.
+
+    Scoring:
+    - Fear & Greed: (value - 50) / 50  → [-1, 1]
+    - Price 24 h: clamped to ±10 % → [-1, 1]
+    - CryptoPanic: already [-1, 1]
+    """
+    scores: list[float] = []
+
+    if sources.fear_greed_value is not None:
+        scores.append((sources.fear_greed_value - 50) / 50.0)
+
+    if sources.price_change_24h_pct is not None:
+        scores.append(max(-1.0, min(1.0, sources.price_change_24h_pct / 10.0)))
+
+    if sources.cryptopanic_score is not None:
+        scores.append(sources.cryptopanic_score)
+
+    if not scores:
+        return 0.0
+    return max(-1.0, min(1.0, sum(scores) / len(scores)))
 
 
 def to_prompt_text(sources: CryptoSources) -> str:
@@ -171,6 +256,9 @@ def to_prompt_text(sources: CryptoSources) -> str:
 
     if sources.market_cap_rank is not None:
         lines.append(f"- Market cap rank: #{sources.market_cap_rank}")
+
+    if sources.cryptopanic_score is not None:
+        lines.append(f"- CryptoPanic sentiment score: {sources.cryptopanic_score:+.2f}")
 
     if sources.news_headlines:
         lines.append("- Recent headlines:")
