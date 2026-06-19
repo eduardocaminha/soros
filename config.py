@@ -115,6 +115,19 @@ MARKETCAP_TOP_N: int = int(os.environ.get("MARKETCAP_TOP_N", "20"))
 MARKETCAP_REFRESH_SECS: int = int(os.environ.get("MARKETCAP_REFRESH_SECS", "3600"))
 
 # ---------------------------------------------------------------------------
+# DEX discovery signals (DexScreener + GeckoTerminal, keyless)
+# Boost gem_score for tokens trending on DEX that also have a Binance pair.
+# Execution is always CEX-only; DEX signals are discovery hints only.
+# ---------------------------------------------------------------------------
+
+# Multiplier applied to gem_score when a candidate is also DEX-trending.
+# Set to 1.0 to disable the DEX boost entirely.
+DEX_BOOST_MULTIPLIER: float = float(os.environ.get("DEX_BOOST_MULTIPLIER", "1.5"))
+
+# How long (seconds) to cache DEX trending results before refreshing.
+DEX_SCAN_CACHE_SECS: int = int(os.environ.get("DEX_SCAN_CACHE_SECS", "300"))
+
+# ---------------------------------------------------------------------------
 # Gem scanner — ignition candidates (CEX via ccxt.fetch_tickers)
 # ---------------------------------------------------------------------------
 

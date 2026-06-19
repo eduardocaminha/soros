@@ -360,3 +360,35 @@ class TestAutonomousUniverseConfig:
         monkeypatch.setenv("GEM_TRAILING_STOP_PCT", "0.0")
         importlib.reload(config)
         assert config.GEM_TRAILING_STOP_PCT == 0.0
+
+
+class TestDexDiscoveryConfig:
+    def teardown_method(self):
+        for key in ("DEX_BOOST_MULTIPLIER", "DEX_SCAN_CACHE_SECS"):
+            os.environ.pop(key, None)
+        importlib.reload(config)
+
+    def test_dex_boost_multiplier_default(self, monkeypatch):
+        monkeypatch.delenv("DEX_BOOST_MULTIPLIER", raising=False)
+        importlib.reload(config)
+        assert config.DEX_BOOST_MULTIPLIER == 1.5
+
+    def test_dex_boost_multiplier_from_env(self, monkeypatch):
+        monkeypatch.setenv("DEX_BOOST_MULTIPLIER", "2.0")
+        importlib.reload(config)
+        assert config.DEX_BOOST_MULTIPLIER == 2.0
+
+    def test_dex_boost_multiplier_one_disables_boost(self, monkeypatch):
+        monkeypatch.setenv("DEX_BOOST_MULTIPLIER", "1.0")
+        importlib.reload(config)
+        assert config.DEX_BOOST_MULTIPLIER == 1.0
+
+    def test_dex_scan_cache_secs_default(self, monkeypatch):
+        monkeypatch.delenv("DEX_SCAN_CACHE_SECS", raising=False)
+        importlib.reload(config)
+        assert config.DEX_SCAN_CACHE_SECS == 300
+
+    def test_dex_scan_cache_secs_from_env(self, monkeypatch):
+        monkeypatch.setenv("DEX_SCAN_CACHE_SECS", "600")
+        importlib.reload(config)
+        assert config.DEX_SCAN_CACHE_SECS == 600
