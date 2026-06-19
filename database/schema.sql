@@ -166,6 +166,7 @@ CREATE TABLE IF NOT EXISTS screener_runs (
     conviction      REAL    NOT NULL DEFAULT 0.0,
     selected        INTEGER NOT NULL CHECK (selected IN (0, 1)),
     reason          TEXT    NOT NULL,
+    origin          TEXT    NOT NULL DEFAULT '',
     inserted_at     INTEGER NOT NULL DEFAULT (unixepoch())
 );
 

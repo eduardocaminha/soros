@@ -64,9 +64,14 @@ class Database:
 
     def _migrate(self, conn: sqlite3.Connection) -> None:
         """Add columns introduced after the initial schema creation."""
-        existing = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
-        if "ignition_score" not in existing:
+        signals_cols = {row[1] for row in conn.execute("PRAGMA table_info(signals)")}
+        if "ignition_score" not in signals_cols:
             conn.execute("ALTER TABLE signals ADD COLUMN ignition_score REAL")
+            conn.commit()
+
+        screener_cols = {row[1] for row in conn.execute("PRAGMA table_info(screener_runs)")}
+        if "origin" not in screener_cols:
+            conn.execute("ALTER TABLE screener_runs ADD COLUMN origin TEXT NOT NULL DEFAULT ''")
             conn.commit()
 
 
