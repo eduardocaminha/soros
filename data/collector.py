@@ -7,6 +7,7 @@ table (INSERT OR IGNORE — unique index on (symbol, timeframe, ts)).
 
 from __future__ import annotations
 
+import time
 from typing import Any
 
 import ccxt
@@ -15,6 +16,10 @@ import config
 from database.db import get_connection, get_logger
 
 _log = get_logger(__name__)
+
+_perp_symbols_cache: set[str] | None = None
+_perp_cache_ts: float = 0.0
+_PERP_CACHE_TTL = 4 * 3600  # refresh perp symbol list every 4 hours
 
 
 def _make_exchange(market_type: str = "spot") -> ccxt.binance:
@@ -28,6 +33,33 @@ def _make_exchange(market_type: str = "spot") -> ccxt.binance:
     return ccxt.binance(params)
 
 
+def _get_perp_symbols(futures: ccxt.binance) -> set[str] | None:
+    """Return cached set of spot symbols that have a USDT-M perp on Binance.
+
+    Returns None if the list has never been loaded successfully (caller falls
+    back to attempting fetch + warning on failure — original behavior).
+    """
+    global _perp_symbols_cache, _perp_cache_ts
+    now = time.monotonic()
+    if _perp_symbols_cache is not None and (now - _perp_cache_ts) < _PERP_CACHE_TTL:
+        return _perp_symbols_cache
+    try:
+        markets = futures.load_markets()
+        perps: set[str] = set()
+        for market in markets.values():
+            if market.get("swap") and market.get("settle") == "USDT":
+                base = market.get("base", "")
+                if base:
+                    perps.add(f"{base}/USDT")
+        _perp_symbols_cache = perps
+        _perp_cache_ts = now
+        _log.info("loaded %d USDT-M perp symbols from Binance", len(perps))
+    except Exception as exc:
+        _log.warning("could not load Binance perp markets: %s", exc)
+        # keep stale cache if available; return None on first-call failure
+    return _perp_symbols_cache
+
+
 def _perp_symbol(spot_symbol: str) -> str:
     """Convert 'BTC/USDT' → 'BTC/USDT:USDT' (Binance USDT-M perpetual)."""
     base = spot_symbol.split("/")[0]
@@ -35,9 +67,17 @@ def _perp_symbol(spot_symbol: str) -> str:
 
 
 def _fetch_funding_rate(
-    futures: ccxt.binance, spot_symbol: str
+    futures: ccxt.binance,
+    spot_symbol: str,
+    perp_symbols: set[str] | None = None,
 ) -> float | None:
-    """Return the latest funding rate for the perpetual matching *spot_symbol*."""
+    """Return the latest funding rate for the perpetual matching *spot_symbol*.
+
+    When *perp_symbols* is provided and *spot_symbol* is not in it, returns
+    None silently (no WARNING) — the coin has no perp listed on Binance.
+    """
+    if perp_symbols is not None and spot_symbol not in perp_symbols:
+        return None
     try:
         result = futures.fetch_funding_rate(_perp_symbol(spot_symbol))
         return result.get("fundingRate")
@@ -85,12 +125,13 @@ def _collect_symbol(
     futures: ccxt.binance,
     symbol: str,
     limit: int,
+    perp_symbols: set[str] | None = None,
 ) -> int:
     """Collect OHLCV + funding for one symbol. Returns inserted row count (0 on error)."""
     try:
         _log.info("collecting OHLCV for %s (limit=%d)", symbol, limit)
         candles = spot.fetch_ohlcv(symbol, timeframe=config.OHLCV_TIMEFRAME, limit=limit)
-        funding_rate = _fetch_funding_rate(futures, symbol)
+        funding_rate = _fetch_funding_rate(futures, symbol, perp_symbols)
         count = _upsert_candles(symbol, candles, funding_rate)
         _log.info(
             "inserted %d new candles for %s (funding_rate=%s)",
@@ -130,13 +171,14 @@ def collect_once(
 
     spot = _make_exchange("spot")
     futures = _make_exchange("future")
+    perp_symbols = _get_perp_symbols(futures)
     results: dict[str, int] = {}
 
     for symbol in pinned:
-        results[symbol] = _collect_symbol(spot, futures, symbol, config.OHLCV_LIMIT)
+        results[symbol] = _collect_symbol(spot, futures, symbol, config.OHLCV_LIMIT, perp_symbols)
 
     for symbol in watchlist_only:
-        results[symbol] = _collect_symbol(spot, futures, symbol, config.WATCHLIST_OHLCV_LIMIT)
+        results[symbol] = _collect_symbol(spot, futures, symbol, config.WATCHLIST_OHLCV_LIMIT, perp_symbols)
 
     return results
 
