@@ -1,10 +1,10 @@
-"""Bull vs bear debate — runs only when signals diverge.
+"""Bull vs bear debate — runs only when signals genuinely diverge.
 
-The LLM quota is saved by skipping the debate in clear-conviction cases.
-Debate is triggered when:
-  - The analyst score and the deterministic signal score have opposite signs
-    (LLM says bullish, quant says bearish or vice versa), OR
-  - |analyst_score| < LOW_CONVICTION_THRESHOLD  (low-confidence single pass)
+The LLM quota is saved by calling Claude ONLY on genuine divergence: when the
+(keyless, pre-scored) sentiment and the deterministic signal point opposite
+ways. A low or neutral sentiment is not a conflict and never triggers the
+debate on its own — doing so used to fire an LLM call for nearly every coin
+every cycle and burn through the Claude subscription quota.
 
 When triggered, a single structured prompt asks Claude to weigh both sides
 and return a final verdict.  If the client is unavailable or rate-limited,
@@ -23,8 +23,6 @@ from sentiment.analyst import AnalystResult
 from sentiment.claude_client import ClaudeClient
 
 _log = logging.getLogger(__name__)
-
-LOW_CONVICTION_THRESHOLD = 0.25  # |score| below this triggers debate
 
 _DEBATE_TEMPLATE = """\
 You are a senior portfolio risk manager arbitrating between two analysts on \
@@ -58,10 +56,14 @@ class DebateResult:
 
 
 def should_debate(analyst_score: float, deterministic_score: float) -> bool:
-    """Return True when signals diverge enough to warrant a debate call."""
-    low_conviction = abs(analyst_score) < LOW_CONVICTION_THRESHOLD
-    opposite_signs = (analyst_score * deterministic_score) < 0
-    return low_conviction or opposite_signs
+    """Return True only on genuine divergence: sentiment and the deterministic
+    signal point opposite ways (one positive, one negative).
+
+    A low/neutral sentiment is NOT a conflict and does not trigger the debate
+    on its own — that previously fired an LLM call almost every cycle and
+    exhausted the Claude subscription quota.
+    """
+    return (analyst_score * deterministic_score) < 0
 
 
 def _parse_response(text: str) -> tuple[float, str] | None:

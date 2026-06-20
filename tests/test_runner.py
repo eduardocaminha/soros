@@ -352,7 +352,7 @@ class TestAnalyseSymbol:
             return _fake_stock_sources(symbol)
 
         monkeypatch.setattr("sentiment.runner.sources_stocks.fetch", fake_fetch)
-        # Use -0.6 so |pre_score| >= LOW_CONVICTION_THRESHOLD (0.25); aligned with det_score → no debate
+        # pre_score -0.6 has the same sign as det_score → no divergence → no debate
         monkeypatch.setattr("sentiment.runner.sources_stocks.pre_score", lambda s: -0.6)
         monkeypatch.setattr("sentiment.runner.sources_stocks.to_prompt_text", lambda s: "")
         _analyse_symbol("AAPL", "stocks", MagicMock(), det_score=-0.6)

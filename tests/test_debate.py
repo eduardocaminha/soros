@@ -9,7 +9,6 @@ import pytest
 
 from sentiment.analyst import AnalystResult
 from sentiment.debate import (
-    LOW_CONVICTION_THRESHOLD,
     DebateResult,
     _parse_response,
     debate,
@@ -54,21 +53,25 @@ class TestShouldDebate:
     def test_same_sign_no_debate(self):
         assert should_debate(-0.7, -0.4) is False
 
-    def test_low_conviction_analyst_triggers_debate(self):
-        assert should_debate(LOW_CONVICTION_THRESHOLD - 0.01, 0.5) is True
+    def test_low_conviction_same_sign_no_debate(self):
+        # Weak/neutral sentiment with the SAME sign as quant is not a conflict.
+        assert should_debate(0.24, 0.5) is False
 
-    def test_exactly_at_threshold_no_debate(self):
-        assert should_debate(LOW_CONVICTION_THRESHOLD, 0.5) is False
+    def test_low_conviction_opposite_signs_still_debates(self):
+        # A genuine divergence triggers even at low conviction.
+        assert should_debate(0.24, -0.5) is True
 
-    def test_zero_analyst_score_triggers_debate(self):
-        assert should_debate(0.0, 0.5) is True
+    def test_zero_analyst_score_no_debate(self):
+        # Neutral sentiment (0.0) never triggers on its own.
+        assert should_debate(0.0, 0.5) is False
 
-    def test_zero_det_score_no_opposite_signs(self):
-        # 0.5 * 0.0 = 0, not < 0, so only low_conviction triggers
+    def test_zero_det_score_no_debate(self):
+        # 0.5 * 0.0 = 0, not < 0 → no divergence → no debate
         assert should_debate(0.5, 0.0) is False
 
-    def test_both_zero_triggers_low_conviction(self):
-        assert should_debate(0.0, 0.0) is True
+    def test_both_zero_no_debate(self):
+        # 0.0 * 0.0 = 0, not < 0 → no debate
+        assert should_debate(0.0, 0.0) is False
 
 
 # ---------------------------------------------------------------------------
@@ -137,11 +140,14 @@ class TestDebate:
         assert result.rationale == "Mixed signals"
         client.query.assert_called_once()
 
-    def test_debate_triggered_on_low_conviction(self):
-        a = _analyst(0.1)  # below threshold
+    def test_no_debate_on_low_conviction_same_sign(self):
+        # Low conviction but same sign as the quant signal → no conflict → no
+        # LLM call (this previously fired the debate and burned quota).
+        a = _analyst(0.1)
         client = _client('{"score": 0.4, "rationale": "Slight bullish edge"}')
         result = debate("sources", a, 0.5, client)
-        assert result.debated is True
+        assert result.debated is False
+        client.query.assert_not_called()
 
     def test_fallback_to_analyst_when_client_returns_none(self):
         a = _analyst(0.5)

@@ -97,6 +97,23 @@ class TestClaudeClientQuery:
             result = client.query("prompt")
         assert result is None
 
+    def test_circuit_breaker_short_circuits_after_rate_limit(self):
+        # After hitting the rate limit once, subsequent queries return None
+        # WITHOUT calling the SDK again — don't hammer a maxed-out quota.
+        sdk = MagicMock(return_value=_events(_FakeRateLimitEvent()))
+        with patch.multiple(
+            "sentiment.claude_client",
+            _SDK_AVAILABLE=True,
+            _sdk_query=sdk,
+            AssistantMessage=_FakeAssistantMessage,
+            RateLimitEvent=_FakeRateLimitEvent,
+            ClaudeAgentOptions=MagicMock(return_value=MagicMock()),
+        ):
+            client = ClaudeClient()
+            assert client.query("p1") is None  # hits the rate limit
+            assert client.query("p2") is None  # short-circuited
+        assert sdk.call_count == 1  # SDK invoked only on the first call
+
     def test_returns_none_when_no_assistant_message(self):
         with self._patch_sdk(_events()):
             client = ClaudeClient()

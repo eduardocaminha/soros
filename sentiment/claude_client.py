@@ -75,6 +75,10 @@ class ClaudeClient:
 
     def __init__(self, max_turns: int = 1) -> None:
         self._max_turns = max_turns
+        # Circuit breaker: once a query hits the subscription rate limit, stop
+        # calling the SDK for the rest of this client's life (one client per
+        # cycle) so a maxed-out quota is not hammered once per symbol.
+        self._rate_limited = False
 
     # ------------------------------------------------------------------
     # Public interface
@@ -90,10 +94,16 @@ class ClaudeClient:
         if not _SDK_AVAILABLE:
             _log.warning("claude_code_sdk not installed; sentiment unavailable")
             return None
+        if self._rate_limited:
+            # Already rate-limited this cycle — don't hammer a maxed-out quota.
+            return None
         try:
             return asyncio.run(self._async_query(prompt))
         except RateLimitedError:
-            _log.warning("Claude rate limit reached; falling back to deterministic-only")
+            self._rate_limited = True
+            _log.warning(
+                "Claude rate limit reached; deterministic-only for the rest of this cycle"
+            )
             return None
         except Exception as exc:  # noqa: BLE001
             _log.error("claude_client.query failed: %s", exc)
