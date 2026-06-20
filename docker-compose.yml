@@ -1,0 +1,49 @@
+name: soros
+
+services:
+  bot:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    volumes:
+      - soros_data:/data
+    environment:
+      DB_PATH: /data/soros.db
+      # Execution toggles — default OFF (paper, keyless)
+      CRYPTO_LIVE: ${CRYPTO_LIVE:-false}
+      STOCKS_LIVE: ${STOCKS_LIVE:-false}
+      SENTIMENT_ENABLED: ${SENTIMENT_ENABLED:-false}
+      # Runtime-tunable
+      SCREENER_ENABLED: ${SCREENER_ENABLED:-false}
+      LOOP_INTERVAL_SECONDS: ${LOOP_INTERVAL_SECONDS:-3600}
+      LOG_LEVEL: ${LOG_LEVEL:-INFO}
+      # Claude subscription token — optional; omit to run keyless (Fear&Greed + CoinGecko)
+      CLAUDE_CODE_OAUTH_TOKEN: ${CLAUDE_CODE_OAUTH_TOKEN:-}
+      # Exchange credentials — required only when CRYPTO_LIVE/STOCKS_LIVE=true
+      BINANCE_API_KEY: ${BINANCE_API_KEY:-}
+      BINANCE_SECRET: ${BINANCE_SECRET:-}
+      ALPACA_API_KEY: ${ALPACA_API_KEY:-}
+      ALPACA_SECRET: ${ALPACA_SECRET:-}
+      ALPACA_BASE_URL: ${ALPACA_BASE_URL:-https://paper-api.alpaca.markets}
+      # Sentiment
+      FINNHUB_API_KEY: ${FINNHUB_API_KEY:-}
+      # Capital
+      INITIAL_CAPITAL: ${INITIAL_CAPITAL:-10000}
+
+  dashboard:
+    build:
+      context: ./dashboard
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    volumes:
+      - soros_data:/data
+    environment:
+      DB_PATH: /data/soros.db
+    depends_on:
+      - bot
+
+volumes:
+  soros_data:
