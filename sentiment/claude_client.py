@@ -46,6 +46,26 @@ class RateLimitedError(Exception):
     """Raised internally when the SDK emits a RateLimitEvent."""
 
 
+def _suppress_asyncgen_aclose(
+    loop: asyncio.AbstractEventLoop, context: dict[str, Any]
+) -> None:
+    """Loop exception handler that swallows the benign async-generator cleanup
+    error.
+
+    Breaking out of the SDK stream on a RateLimitEvent forces aclose() on a
+    generator whose internal task is still running; asyncio's finalizer reports
+    "aclose(): asynchronous generator is already running" through the loop
+    exception handler (NOT a catchable `except` at the call site). Swallow
+    exactly that; everything else falls through to the default handler.
+    """
+    exc = context.get("exception")
+    if isinstance(exc, RuntimeError) and "asynchronous generator is already running" in str(
+        exc
+    ):
+        return
+    loop.default_exception_handler(context)
+
+
 class ClaudeClient:
     """Sync wrapper around the async claude_code_sdk for sentiment queries.
 
@@ -84,29 +104,24 @@ class ClaudeClient:
     # ------------------------------------------------------------------
 
     async def _async_query(self, prompt: str) -> str | None:
+        # The aclose-on-rate-limit cleanup error surfaces via the loop exception
+        # handler (asyncio's async-gen finalizer), not as a catchable except at
+        # the break site, so install a handler that swallows exactly that.
+        asyncio.get_running_loop().set_exception_handler(_suppress_asyncgen_aclose)
         parts: list[str] = []
         rate_limited = False
-        try:
-            async for event in _sdk_query(  # type: ignore[misc]
-                prompt=prompt,
-                options=ClaudeAgentOptions(max_turns=self._max_turns),
-            ):
-                if RateLimitEvent is not None and isinstance(event, RateLimitEvent):
-                    rate_limited = True
-                    break
-                if AssistantMessage is not None and isinstance(event, AssistantMessage):
-                    for block in event.content:
-                        text = getattr(block, "text", None)
-                        if text:
-                            parts.append(text)
-        except RuntimeError as exc:
-            # `break` after a RateLimitEvent calls aclose() on the SDK generator.
-            # If the generator has an active internal task, Python raises
-            # "aclose(): asynchronous generator is already running".
-            # Suppress that specific cleanup error; re-raise everything else.
-            if not (rate_limited and "asynchronous generator" in str(exc)):
-                raise
-            _log.debug("Suppressed async-gen cleanup error on rate-limit exit: %s", exc)
+        async for event in _sdk_query(  # type: ignore[misc]
+            prompt=prompt,
+            options=ClaudeAgentOptions(max_turns=self._max_turns),
+        ):
+            if RateLimitEvent is not None and isinstance(event, RateLimitEvent):
+                rate_limited = True
+                break
+            if AssistantMessage is not None and isinstance(event, AssistantMessage):
+                for block in event.content:
+                    text = getattr(block, "text", None)
+                    if text:
+                        parts.append(text)
         if rate_limited:
             raise RateLimitedError
         return "\n".join(parts) if parts else None
