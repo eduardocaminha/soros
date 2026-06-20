@@ -1,0 +1,13 @@
+.git
+.venv
+node_modules
+data/*.db
+dashboard/node_modules
+dashboard/.next
+__pycache__
+**/__pycache__
+*.pyc
+*.pyo
+.pytest_cache
+tests
+backtest
