@@ -202,6 +202,32 @@ interface BacktestABData {
   error?: string;
 }
 
+interface ForwardABMetrics {
+  total_return: number;
+  max_dd: number;
+  sharpe: number | null;
+}
+
+interface ForwardABSeries {
+  timestamps: number[];
+  realEquity: number[];
+  shadowEquity: number[];
+  initialCapital: number;
+  windowStart: number;
+  windowEnd: number;
+  nPoints: number;
+}
+
+interface ForwardABData {
+  ts: number;
+  real?: ForwardABMetrics;
+  shadow?: ForwardABMetrics;
+  series?: ForwardABSeries;
+  sharpeConclusive?: boolean;
+  empty?: boolean;
+  error?: string;
+}
+
 type TabId = "dashboard" | "alerts" | "settings";
 
 const ALERTS_STORAGE_KEY = "soros_alerts_last_visit";
@@ -243,6 +269,8 @@ const GLOSSARY: Record<string, string> = {
   "Backtest A/B": "Comparação entre duas variantes do backtest: 'Sem Sentimento' usa apenas sinais determinísticos (momentum, volatilidade, funding); 'Com Sentimento' injeta o Fear & Greed histórico como sinal de sentimento. Permite avaliar se o sentimento melhora ou piora os resultados.",
   "Cobertura F&G": "Fração das barras do backtest que tinham um valor do índice Fear & Greed disponível no alternative.me. Abaixo de 80% indica que parte do período é estimada por backward-fill.",
   "Fear & Greed": "Índice de sentimento de mercado do alternative.me (0 = medo extremo, 100 = ganância extrema). Valores < 40 geram score negativo (bearish); > 60 geram score positivo (bullish); 40–60 são neutros.",
+  "Forward A/B": "Comparação ao vivo entre a variante configurada do bot ('Configurado') e a variante shadow keyless (sem Claude, apenas Fear&Greed + votos CoinGecko). Cresce a cada ciclo — Sharpe conclusivo requer 30+ pontos.",
+  "Shadow (keyless)": "Variante virtual que usa apenas sinais sem custo de API: Fear&Greed (alternative.me) + votos CoinGecko. Nunca chama o Claude, para não queimar quota numa simulação. Permite isolar o valor do sinal Claude ao vivo.",
 };
 
 const SETTINGS_DESCRIPTIONS: Record<string, string> = {
@@ -1192,6 +1220,215 @@ function BacktestABPanel() {
   );
 }
 
+// ─── Forward A/B Panel ───────────────────────────────────────────────────────
+
+function ForwardABChart({ series }: { series: ForwardABSeries }) {
+  const n = series.timestamps.length;
+  if (n < 2) return <p className="neutral" style={{ padding: "12px 16px" }}>Dados insuficientes para o gráfico.</p>;
+
+  const VW = 900;
+  const VH = 180;
+  const PAD = { top: 12, right: 16, bottom: 28, left: 64 };
+  const chartW = VW - PAD.left - PAD.right;
+  const chartH = VH - PAD.top - PAD.bottom;
+
+  const all = [...series.realEquity, ...series.shadowEquity];
+  const minY = Math.min(...all);
+  const maxY = Math.max(...all);
+  const rangeY = maxY - minY || 1;
+
+  const xOf = (i: number) => PAD.left + (i / (n - 1)) * chartW;
+  const yOf = (v: number) => PAD.top + chartH - ((v - minY) / rangeY) * chartH;
+
+  const realPath = series.realEquity
+    .map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(" ");
+  const shadowPath = series.shadowEquity
+    .map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(" ");
+
+  const yTicks = 4;
+  const yTickVals = Array.from({ length: yTicks + 1 }, (_, k) => minY + (rangeY * k) / yTicks);
+
+  const startDate = new Date(series.windowStart * 1000).toLocaleDateString("pt-BR");
+  const endDate = new Date(series.windowEnd * 1000).toLocaleDateString("pt-BR");
+
+  return (
+    <svg
+      viewBox={`0 0 ${VW} ${VH}`}
+      style={{ width: "100%", height: VH, display: "block" }}
+      aria-label="Forward A/B: curvas de equity configurado vs keyless"
+    >
+      {yTickVals.map((v, k) => (
+        <g key={k}>
+          <line
+            x1={PAD.left} y1={yOf(v)}
+            x2={PAD.left + chartW} y2={yOf(v)}
+            stroke="#30363d" strokeWidth="0.5" strokeDasharray="3,4"
+          />
+          <text x={PAD.left - 6} y={yOf(v) + 4} textAnchor="end" fontSize="10" fill="#8b949e">
+            {fmtEquityLabel(v)}
+          </text>
+        </g>
+      ))}
+
+      <path d={shadowPath} fill="none" stroke="#8b949e" strokeWidth="2" strokeLinejoin="round" strokeDasharray="6,3" />
+      <path d={realPath} fill="none" stroke="#58a6ff" strokeWidth="2" strokeLinejoin="round" />
+
+      <text x={PAD.left} y={VH - 6} fontSize="10" fill="#8b949e">{startDate}</text>
+      <text x={PAD.left + chartW} y={VH - 6} fontSize="10" fill="#8b949e" textAnchor="end">{endDate}</text>
+
+      {/* Legend */}
+      <rect x={PAD.left + chartW - 180} y={PAD.top + 1} width={12} height={3} fill="#58a6ff" rx="1" />
+      <text x={PAD.left + chartW - 164} y={PAD.top + 8} fontSize="11" fill="#e6edf3">Configurado</text>
+      <line x1={PAD.left + chartW - 82} y1={PAD.top + 4} x2={PAD.left + chartW - 70} y2={PAD.top + 4} stroke="#8b949e" strokeWidth="2" strokeDasharray="6,3" />
+      <text x={PAD.left + chartW - 66} y={PAD.top + 8} fontSize="11" fill="#e6edf3">Keyless</text>
+    </svg>
+  );
+}
+
+function ForwardABPanel() {
+  const [fwd, setFwd] = useState<ForwardABData | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/forward-ab");
+      const json = (await res.json()) as ForwardABData;
+      setFwd(json);
+    } catch {
+      // silent — will retry on next poll
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  if (!fwd || fwd.error || fwd.empty || !fwd.real || !fwd.shadow || !fwd.series) return null;
+
+  const real = fwd.real;
+  const shadow = fwd.shadow;
+  const s = fwd.series;
+  const conclusive = fwd.sharpeConclusive ?? false;
+
+  const fmtPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
+
+  const fmtSharpe = (v: number | null) => {
+    if (v === null) return <span className="neutral">—</span>;
+    return (
+      <span className={v >= 1 ? "positive" : v >= 0 ? "" : "negative"}>
+        {v.toFixed(2)}
+        {!conclusive && <span className="neutral" style={{ fontSize: 10 }}> *</span>}
+      </span>
+    );
+  };
+
+  const fmtDd = (v: number) => {
+    const pct = v * 100;
+    return <span className={pct > 20 ? "negative" : pct > 10 ? "" : "positive"}>{pct.toFixed(1)}%</span>;
+  };
+
+  const realBetter = real.total_return > shadow.total_return;
+
+  return (
+    <Section title="Forward A/B — Configurado vs Keyless (ao vivo)">
+      {/* Small sample warning */}
+      {!conclusive && (
+        <div style={{
+          padding: "8px 16px",
+          borderBottom: "1px solid var(--border)",
+          background: "rgba(210,153,34,0.06)",
+          fontSize: 11,
+          color: "var(--text-muted)",
+          display: "flex",
+          gap: 8,
+          alignItems: "flex-start",
+        }}>
+          <span style={{ color: "#d29922", fontWeight: 600, flexShrink: 0 }}>Amostra pequena:</span>
+          <span>
+            n={s.nPoints} ponto{s.nPoints !== 1 ? "s" : ""} — Sharpe e métricas <b>não conclusivos</b> com menos de 30 ciclos.
+            O A/B forward se torna estatisticamente relevante após semanas de operação.
+          </span>
+        </div>
+      )}
+
+      {/* Caveat — always visible */}
+      <div style={{
+        padding: "8px 16px",
+        borderBottom: "1px solid var(--border)",
+        background: "rgba(88,166,255,0.04)",
+        fontSize: 11,
+        color: "var(--text-muted)",
+        display: "flex",
+        gap: 8,
+        alignItems: "flex-start",
+      }}>
+        <span style={{ color: "#58a6ff", fontWeight: 600, flexShrink: 0 }}>Info:</span>
+        <span>
+          <Tooltip text={GLOSSARY["Forward A/B"]}>Configurado</Tooltip> = variante real do bot (com as configurações atuais).{" "}
+          <Tooltip text={GLOSSARY["Shadow (keyless)"]}>Keyless</Tooltip> = variante shadow sem Claude (Fear&amp;Greed + votos CoinGecko apenas).
+          Ambas usam os mesmos preços e posições; só o componente de sentimento difere.
+        </span>
+      </div>
+
+      {/* Overlay chart */}
+      <div style={{ padding: "12px 16px 0" }}>
+        <ForwardABChart series={s} />
+      </div>
+
+      {/* Verdict */}
+      <div style={{
+        padding: "8px 16px",
+        borderTop: "1px solid var(--border)",
+        fontSize: 13,
+        fontWeight: 600,
+        color: realBetter ? "var(--green)" : "var(--red)",
+      }}>
+        {realBetter
+          ? "▲ Configurado está ACIMA do keyless neste período"
+          : "▼ Configurado está ABAIXO do keyless neste período"}
+        {!conclusive && <span style={{ fontSize: 11, fontWeight: 400, color: "var(--text-muted)", marginLeft: 8 }}>(amostra pequena — não conclusivo)</span>}
+      </div>
+
+      {/* Side-by-side metrics */}
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: "38%" }}>Métrica</th>
+            <th>Configurado</th>
+            <th><Tooltip text={GLOSSARY["Shadow (keyless)"]}>Keyless (sem Claude)</Tooltip></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Retorno Total"]}>Retorno Total</Tooltip></td>
+            <td><span className={real.total_return >= 0 ? "positive" : "negative"}>{fmtPct(real.total_return)}</span></td>
+            <td><span className={shadow.total_return >= 0 ? "positive" : "negative"}>{fmtPct(shadow.total_return)}</span></td>
+          </tr>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Sharpe"]}>Sharpe Anualizado</Tooltip></td>
+            <td>{fmtSharpe(real.sharpe)}</td>
+            <td>{fmtSharpe(shadow.sharpe)}</td>
+          </tr>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Max DD"]}>Max Drawdown</Tooltip></td>
+            <td>{fmtDd(real.max_dd)}</td>
+            <td>{fmtDd(shadow.max_dd)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Footnote */}
+      <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 10, borderTop: "1px solid var(--border)" }}>
+        n={s.nPoints} pontos · desde {ts2str(s.windowStart)}
+        {!conclusive && " · * Sharpe com n<30 — não conclusivo"}
+      </div>
+    </Section>
+  );
+}
+
 function Section({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 24 }}>
@@ -1631,6 +1868,7 @@ export default function Dashboard() {
           <EquityCard data={data} />
           <BenchmarkPanel />
           <BacktestABPanel />
+          <ForwardABPanel />
           <SweepTable />
           <PositionsTable positions={data.positions} />
           <ScreenerTable screener={data.screener ?? []} />
