@@ -170,6 +170,10 @@ describe("buildBtcBenchmark", () => {
     expect(() => buildBtcBenchmark([], [[1000, 50000]])).toThrow("snapshots is empty");
   });
 
+  test("throws on empty btcCloses", () => {
+    expect(() => buildBtcBenchmark([[1000, 10000]], [])).toThrow("no BTC close prices overlap");
+  });
+
   test("throws when no BTC closes overlap", () => {
     expect(() =>
       buildBtcBenchmark([[2000, 10000]], [[1000, 50000], [1500, 51000]])
@@ -245,6 +249,47 @@ describe("buildBtcBenchmark", () => {
     );
     expect(result.windowStart).toBe(1000);
     expect(result.windowEnd).toBe(5000);
+  });
+
+  test("multiple consecutive BTC gaps: forward-fill produces correct equity values", () => {
+    // BTC price only at t=1000 (50_000) and t=4000 (60_000)
+    // ts=2000 and ts=3000 forward-fill from t=1000
+    const result = buildBtcBenchmark(
+      [[1000, 10000], [2000, 10000], [3000, 10000], [4000, 10000]],
+      [[1000, 50000], [4000, 60000]]
+    );
+    expect(result.nBtcGaps).toBe(2);
+    // ts=1000: btcEquity = 10000 * (50000/50000) = 10000
+    expect(result.btcEquity[0]).toBeCloseTo(10000);
+    // ts=2000: forward-fill to 50000 → same
+    expect(result.btcEquity[1]).toBeCloseTo(10000);
+    // ts=3000: forward-fill to 50000 → same
+    expect(result.btcEquity[2]).toBeCloseTo(10000);
+    // ts=4000: 10000 * (60000/50000) = 12000
+    expect(result.btcEquity[3]).toBeCloseTo(12000);
+  });
+
+  test("all snapshots except first are BTC gaps (entire series forward-filled from t=0 price)", () => {
+    // BTC data only at ts=0; snapshots at 0,1000,2000 all use price from ts=0
+    const result = buildBtcBenchmark(
+      [[0, 10000], [1000, 10500], [2000, 11000]],
+      [[0, 50000]]
+    );
+    expect(result.nBtcGaps).toBe(2);  // ts=1000 and ts=2000 are gaps
+    expect(result.nPoints).toBe(3);
+    // All BTC equity values equal initial capital (price unchanged by definition)
+    for (const v of result.btcEquity) expect(v).toBeCloseTo(10000);
+  });
+
+  test("only snapshots covered by BTC data are included in aligned window", () => {
+    // 3 snapshots: ts=100 before BTC, ts=200 and ts=300 after BTC starts
+    const result = buildBtcBenchmark(
+      [[100, 9000], [200, 10000], [300, 11000]],
+      [[200, 50000], [300, 55000]]
+    );
+    expect(result.nPoints).toBe(2);
+    expect(result.initialCapital).toBeCloseTo(10000);
+    expect(result.windowStart).toBe(200);
   });
 });
 
@@ -339,5 +384,47 @@ describe("computeMetrics", () => {
     expect(m.btcTotalReturn).toBeCloseTo(-0.2);
     expect(m.sorosMaxDrawdown).toBeCloseTo(0);
     expect(m.btcMaxDrawdown).toBeCloseTo(-0.2);
+  });
+
+  test("n=1 (single point): returns 0, no drawdown, sharpe null, not conclusive", () => {
+    const m = computeMetrics(makeSeries([10000], [10000]));
+    expect(m.n).toBe(1);
+    expect(m.sorosTotalReturn).toBeCloseTo(0);
+    expect(m.btcTotalReturn).toBeCloseTo(0);
+    expect(m.sorosMaxDrawdown).toBeCloseTo(0);
+    expect(m.btcMaxDrawdown).toBeCloseTo(0);
+    expect(m.sorosSharpe).toBeNull();
+    expect(m.btcSharpe).toBeNull();
+    expect(m.sharpeConclusive).toBe(false);
+  });
+
+  test("n=2 (two points): sharpe is null — stdev requires ≥2 returns", () => {
+    const m = computeMetrics(makeSeries([10000, 11000], [10000, 9000]));
+    expect(m.n).toBe(2);
+    // Only 1 period return → stdev undefined → sharpe null
+    expect(m.sorosSharpe).toBeNull();
+    expect(m.btcSharpe).toBeNull();
+    expect(m.sharpeConclusive).toBe(false);
+    // But totalReturn and drawdown still work
+    expect(m.sorosTotalReturn).toBeCloseTo(0.1);
+    expect(m.btcTotalReturn).toBeCloseTo(-0.1);
+  });
+
+  test("irregular timestamps: medianIntervalSeconds reflects actual gaps", () => {
+    // gaps: 1h, 1h, 48h → median = 1h (3600)
+    const ts0 = 1_000_000;
+    const series: BenchmarkSeries = {
+      timestamps: [ts0, ts0 + 3600, ts0 + 7200, ts0 + 7200 + 172800],
+      sorosEquity: [10000, 10100, 10200, 10300],
+      btcEquity: [10000, 10050, 10100, 10150],
+      initialCapital: 10000,
+      btcStartPrice: 50000,
+      windowStart: ts0,
+      windowEnd: ts0 + 7200 + 172800,
+      nPoints: 4,
+      nBtcGaps: 1,
+    };
+    const m = computeMetrics(series);
+    expect(m.medianIntervalSeconds).toBeCloseTo(3600);
   });
 });
