@@ -133,6 +133,41 @@ interface SweepData {
   error?: string;
 }
 
+interface BenchmarkSeries {
+  timestamps: number[];
+  sorosEquity: number[];
+  btcEquity: number[];
+  initialCapital: number;
+  btcStartPrice: number;
+  windowStart: number;
+  windowEnd: number;
+  nPoints: number;
+  nBtcGaps: number;
+}
+
+interface BenchmarkMetrics {
+  sorosTotalReturn: number;
+  sorosSharpe: number | null;
+  sorosMaxDrawdown: number;
+  btcTotalReturn: number;
+  btcSharpe: number | null;
+  btcMaxDrawdown: number;
+  n: number;
+  annualizationFactor: number;
+  medianIntervalSeconds: number;
+  sharpeConclusive: boolean;
+  riskFreeRate: number;
+}
+
+interface BenchmarkData {
+  ts: number;
+  series?: BenchmarkSeries;
+  metrics?: BenchmarkMetrics;
+  empty?: boolean;
+  reason?: string;
+  error?: string;
+}
+
 type TabId = "dashboard" | "alerts" | "settings";
 
 const ALERTS_STORAGE_KEY = "soros_alerts_last_visit";
@@ -169,6 +204,8 @@ const GLOSSARY: Record<string, string> = {
   "Max DD": "Drawdown máximo no período do backtest — maior queda pico-a-vale registrada.",
   "Win Rate": "Percentual de trades lucrativos. Ex: 60% = 6 de cada 10 trades fecharam no positivo.",
   "Paper": "Modo simulação: ordens são executadas virtualmente sem dinheiro real. Obrigatório 48 h+ antes de ativar live.",
+  "Benchmark BTC": "Quanto valeria o mesmo capital inicial se simplesmente comprado e mantido em BTC desde o início do período (buy-and-hold). É o benchmark honesto para bots de cripto: mais de 80% dos bots de varejo ficam abaixo desta barra depois de custos.",
+  "Retorno Total": "Variação percentual do capital desde o início da janela até o momento atual: (valor_atual − capital_inicial) / capital_inicial × 100.",
 };
 
 const SETTINGS_DESCRIPTIONS: Record<string, string> = {
@@ -708,6 +745,186 @@ function SweepTable() {
   );
 }
 
+// ─── Benchmark Panel ──────────────────────────────────────────────────────────
+
+function fmtEquityLabel(v: number): string {
+  if (v >= 1_000_000) return `$${(v / 1_000_000).toFixed(1)}M`;
+  if (v >= 1_000) return `$${(v / 1_000).toFixed(1)}K`;
+  return `$${Math.round(v)}`;
+}
+
+function BenchmarkChart({ series }: { series: BenchmarkSeries }) {
+  const n = series.timestamps.length;
+  if (n < 2) return <p className="neutral" style={{ padding: "12px 16px" }}>Dados insuficientes para o gráfico.</p>;
+
+  const VW = 900;
+  const VH = 180;
+  const PAD = { top: 12, right: 16, bottom: 28, left: 64 };
+  const chartW = VW - PAD.left - PAD.right;
+  const chartH = VH - PAD.top - PAD.bottom;
+
+  const all = [...series.sorosEquity, ...series.btcEquity];
+  const minY = Math.min(...all);
+  const maxY = Math.max(...all);
+  const rangeY = maxY - minY || 1;
+
+  const xOf = (i: number) => PAD.left + (i / (n - 1)) * chartW;
+  const yOf = (v: number) => PAD.top + chartH - ((v - minY) / rangeY) * chartH;
+
+  const sorosPath = series.sorosEquity
+    .map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(" ");
+  const btcPath = series.btcEquity
+    .map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(" ");
+
+  const yTicks = 4;
+  const yTickVals = Array.from({ length: yTicks + 1 }, (_, k) => minY + (rangeY * k) / yTicks);
+
+  const startDate = new Date(series.windowStart * 1000).toLocaleDateString("pt-BR");
+  const endDate = new Date(series.windowEnd * 1000).toLocaleDateString("pt-BR");
+
+  return (
+    <svg
+      viewBox={`0 0 ${VW} ${VH}`}
+      style={{ width: "100%", height: VH, display: "block" }}
+      aria-label="Gráfico de equity: Soros vs BTC buy-and-hold"
+    >
+      {yTickVals.map((v, k) => (
+        <g key={k}>
+          <line
+            x1={PAD.left} y1={yOf(v)}
+            x2={PAD.left + chartW} y2={yOf(v)}
+            stroke="#30363d" strokeWidth="0.5" strokeDasharray="3,4"
+          />
+          <text x={PAD.left - 6} y={yOf(v) + 4} textAnchor="end" fontSize="10" fill="#8b949e">
+            {fmtEquityLabel(v)}
+          </text>
+        </g>
+      ))}
+
+      <path d={btcPath} fill="none" stroke="#d29922" strokeWidth="2" strokeLinejoin="round" />
+      <path d={sorosPath} fill="none" stroke="#58a6ff" strokeWidth="2" strokeLinejoin="round" />
+
+      <text x={PAD.left} y={VH - 6} fontSize="10" fill="#8b949e">{startDate}</text>
+      <text x={PAD.left + chartW} y={VH - 6} fontSize="10" fill="#8b949e" textAnchor="end">{endDate}</text>
+
+      {/* Legend */}
+      <rect x={PAD.left + chartW - 140} y={PAD.top} width={12} height={3} fill="#58a6ff" rx="1" />
+      <text x={PAD.left + chartW - 124} y={PAD.top + 8} fontSize="11" fill="#e6edf3">Soros</text>
+      <rect x={PAD.left + chartW - 70} y={PAD.top} width={12} height={3} fill="#d29922" rx="1" />
+      <text x={PAD.left + chartW - 54} y={PAD.top + 8} fontSize="11" fill="#e6edf3">BTC B&amp;H</text>
+    </svg>
+  );
+}
+
+function BenchmarkPanel() {
+  const [bm, setBm] = useState<BenchmarkData | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/benchmark");
+      const json = (await res.json()) as BenchmarkData;
+      setBm(json);
+    } catch {
+      // silent — will retry on next poll
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  if (!bm || bm.empty || bm.error || !bm.series || !bm.metrics) return null;
+
+  const m = bm.metrics;
+  const s = bm.series;
+  const beating = m.sorosTotalReturn > m.btcTotalReturn;
+
+  const fmtPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
+
+  const fmtSharpe = (v: number | null) => {
+    if (v === null) return <span className="neutral">—</span>;
+    return (
+      <span className={v >= 1 ? "positive" : v >= 0 ? "" : "negative"}>
+        {v.toFixed(2)}
+        {!m.sharpeConclusive && <span className="neutral" style={{ fontSize: 10 }}> *</span>}
+      </span>
+    );
+  };
+
+  const fmtDd = (v: number) => {
+    const pct = Math.abs(v) * 100;
+    return <span className={pct > 20 ? "negative" : pct > 10 ? "" : "positive"}>{pct.toFixed(1)}%</span>;
+  };
+
+  return (
+    <Section title="Benchmark vs BTC Buy-and-Hold">
+      {/* Beating / losing indicator */}
+      <div style={{
+        padding: "10px 16px",
+        borderBottom: "1px solid var(--border)",
+        background: beating ? "rgba(63,185,80,0.06)" : "rgba(248,81,73,0.06)",
+        display: "flex",
+        alignItems: "center",
+        gap: 16,
+        flexWrap: "wrap",
+      }}>
+        <span style={{ fontSize: 15, fontWeight: 700, color: beating ? "var(--green)" : "var(--red)" }}>
+          {beating ? "▲ Soros está BATENDO o benchmark" : "▼ Soros está PERDENDO para o benchmark"}
+        </span>
+        <span className="neutral" style={{ fontSize: 11 }}>
+          Retorno Soros: <span className={m.sorosTotalReturn >= 0 ? "positive" : "negative"}>{fmtPct(m.sorosTotalReturn)}</span>
+          {" · "}
+          Retorno BTC B&amp;H: <span className={m.btcTotalReturn >= 0 ? "positive" : "negative"}>{fmtPct(m.btcTotalReturn)}</span>
+        </span>
+      </div>
+
+      {/* Overlay chart */}
+      <div style={{ padding: "12px 16px 0" }}>
+        <BenchmarkChart series={s} />
+      </div>
+
+      {/* Side-by-side metrics table */}
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: "40%" }}>Métrica</th>
+            <th>Soros</th>
+            <th><Tooltip text={GLOSSARY["Benchmark BTC"]}>BTC Buy-and-Hold</Tooltip></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Retorno Total"]}>Retorno Total</Tooltip></td>
+            <td><span className={m.sorosTotalReturn >= 0 ? "positive" : "negative"}>{fmtPct(m.sorosTotalReturn)}</span></td>
+            <td><span className={m.btcTotalReturn >= 0 ? "positive" : "negative"}>{fmtPct(m.btcTotalReturn)}</span></td>
+          </tr>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Sharpe"]}>Sharpe Anualizado</Tooltip></td>
+            <td>{fmtSharpe(m.sorosSharpe)}</td>
+            <td>{fmtSharpe(m.btcSharpe)}</td>
+          </tr>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Drawdown"]}>Max Drawdown</Tooltip></td>
+            <td>{fmtDd(m.sorosMaxDrawdown)}</td>
+            <td>{fmtDd(m.btcMaxDrawdown)}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Footnotes */}
+      <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 10, borderTop: "1px solid var(--border)" }}>
+        n={m.n} pontos · risk-free=0% · fator de anualização={m.annualizationFactor.toFixed(0)}×
+        {!m.sharpeConclusive && ` · * Sharpe com n<30 pontos — não conclusivo`}
+        {s.nBtcGaps > 0 && ` · ${s.nBtcGaps} gap(s) de preço BTC preenchidos por forward-fill`}
+      </div>
+    </Section>
+  );
+}
+
 function Section({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 24 }}>
@@ -1145,6 +1362,7 @@ export default function Dashboard() {
       ) : (
         <>
           <EquityCard data={data} />
+          <BenchmarkPanel />
           <SweepTable />
           <PositionsTable positions={data.positions} />
           <ScreenerTable screener={data.screener ?? []} />
