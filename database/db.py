@@ -103,6 +103,39 @@ class Database:
             )
             conn.commit()
 
+        if "backtest_ab_results" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS backtest_ab_results (
+                    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+                    run_id           TEXT    NOT NULL,
+                    run_ts           INTEGER NOT NULL,
+                    start_ts         INTEGER NOT NULL,
+                    end_ts           INTEGER NOT NULL,
+                    symbols_json     TEXT    NOT NULL,
+                    fng_coverage_pct REAL    NOT NULL,
+                    off_total_return REAL    NOT NULL,
+                    off_cagr         REAL    NOT NULL,
+                    off_sharpe       REAL    NOT NULL,
+                    off_max_dd       REAL    NOT NULL,
+                    off_win_rate     REAL    NOT NULL,
+                    off_n_trades     INTEGER NOT NULL,
+                    on_total_return  REAL    NOT NULL,
+                    on_cagr          REAL    NOT NULL,
+                    on_sharpe        REAL    NOT NULL,
+                    on_max_dd        REAL    NOT NULL,
+                    on_win_rate      REAL    NOT NULL,
+                    on_n_trades      INTEGER NOT NULL,
+                    off_equity_json  TEXT    NOT NULL,
+                    on_equity_json   TEXT    NOT NULL,
+                    inserted_at      INTEGER NOT NULL DEFAULT (unixepoch())
+                );
+                CREATE INDEX IF NOT EXISTS ix_backtest_ab_run_ts
+                    ON backtest_ab_results (run_ts DESC);
+                """
+            )
+            conn.commit()
+
 
 # Module-level singleton; components call get_connection() instead of
 # instantiating Database directly.

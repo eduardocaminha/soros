@@ -157,6 +157,62 @@ describe("settings descriptions", () => {
   });
 });
 
+// ─── 5. Backtest A/B panel ────────────────────────────────────────────────────
+
+describe("BacktestABPanel", () => {
+  test("BacktestABPanel component is wired into the dashboard render tree", () => {
+    expect(src).toContain("BacktestABPanel");
+  });
+
+  test("BacktestABPanel is rendered alongside BenchmarkPanel", () => {
+    const bmIdx = src.indexOf("BenchmarkPanel");
+    const abIdx = src.indexOf("BacktestABPanel");
+    expect(bmIdx).toBeGreaterThan(-1);
+    expect(abIdx).toBeGreaterThan(-1);
+  });
+
+  test("F&G-only caveat is declared in the component", () => {
+    expect(src).toContain("somente o Fear");
+    expect(src).toContain("não replica o blend exato ao vivo");
+  });
+
+  test("CLI hint is shown when no data is available", () => {
+    expect(src).toContain("python -m backtest.ab_command");
+  });
+
+  test("comparison header shows sentiment benefit or detriment", () => {
+    expect(src).toContain("Sentimento MELHOROU o retorno");
+    expect(src).toContain("Sentimento PIOROU o retorno");
+  });
+
+  test("overlay chart renders both OFF and ON equity curves", () => {
+    expect(src).toContain("offEquity");
+    expect(src).toContain("onEquity");
+  });
+
+  test("metrics table has pt-BR labels for all metrics", () => {
+    expect(src).toContain("Sem Sentimento");
+    expect(src).toContain("Com Sentimento (F&G)");
+    expect(src).toContain("Win Rate");
+  });
+
+  test("new glossary terms are defined", () => {
+    expect(src).toContain('"Backtest A/B"');
+    expect(src).toContain('"Cobertura F&G"');
+    expect(src).toContain('"Fear & Greed"');
+  });
+
+  test("F&G coverage tooltip is wired to GLOSSARY", () => {
+    expect(src).toContain('GLOSSARY["Cobertura F&G"]');
+  });
+
+  test("never fetches on page load without user trigger — uses poll interval only", () => {
+    // The panel uses useEffect + setInterval (same as BenchmarkPanel / SweepTable),
+    // so it only loads after mount and then on poll cadence — never SSR / build-time.
+    expect(src).toContain("/api/backtest-ab");
+  });
+});
+
 // ─── 6. Benchmark route — buildBtcBenchmark + computeMetrics ─────────────────
 
 import {
