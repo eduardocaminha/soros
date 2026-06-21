@@ -136,6 +136,47 @@ class Database:
             )
             conn.commit()
 
+        if "forward_shadow_positions" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS forward_shadow_positions (
+                    id          INTEGER PRIMARY KEY AUTOINCREMENT,
+                    variant     TEXT    NOT NULL CHECK (variant IN ('real', 'shadow')),
+                    symbol      TEXT    NOT NULL,
+                    asset_class TEXT    NOT NULL CHECK (asset_class IN ('crypto', 'stocks')),
+                    side        TEXT    NOT NULL DEFAULT 'long',
+                    status      TEXT    NOT NULL DEFAULT 'open'
+                                        CHECK (status IN ('open', 'closed')),
+                    quantity    REAL    NOT NULL,
+                    entry_price REAL    NOT NULL,
+                    exit_price  REAL,
+                    opened_at   INTEGER NOT NULL DEFAULT (unixepoch()),
+                    closed_at   INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS ix_fsp_variant_symbol_status
+                    ON forward_shadow_positions (variant, symbol, status);
+                """
+            )
+            conn.commit()
+
+        if "forward_shadow_equity" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS forward_shadow_equity (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts           INTEGER NOT NULL DEFAULT (unixepoch()),
+                    variant      TEXT    NOT NULL CHECK (variant IN ('real', 'shadow')),
+                    equity       REAL    NOT NULL,
+                    peak_equity  REAL    NOT NULL,
+                    drawdown_pct REAL    NOT NULL DEFAULT 0.0,
+                    is_paper     INTEGER NOT NULL DEFAULT 1 CHECK (is_paper IN (0, 1))
+                );
+                CREATE INDEX IF NOT EXISTS ix_fse_variant_ts
+                    ON forward_shadow_equity (variant, ts DESC);
+                """
+            )
+            conn.commit()
+
 
 # Module-level singleton; components call get_connection() instead of
 # instantiating Database directly.

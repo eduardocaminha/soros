@@ -24,7 +24,7 @@ from data import collector as crypto_collector
 from data import stocks_collector
 from data.assembler import assemble_universe
 from database.db import get_connection, get_logger
-from engine import order_executor, signal_aggregator, stocks_executor
+from engine import order_executor, shadow_scorer, signal_aggregator, stocks_executor
 from engine.order_executor import OrderExecutor
 from engine.risk_manager import RiskManager
 from engine.screener import save_screener_result, screen
@@ -263,6 +263,15 @@ def _run_cycle(rm: RiskManager) -> None:
 
     # 8. Snapshot equity for drawdown tracking
     rm.record_equity(equity, is_paper=is_paper)
+
+    # 9. Forward shadow scoring (best-effort — failure must not break real trading)
+    #    Computes both composite variants (real + keyless-only) and updates virtual
+    #    equity tracks so the dashboard can overlay the two curves.
+    if aggregated:
+        try:
+            shadow_scorer.tick(aggregated, is_paper=is_paper)
+        except Exception as exc:
+            _log.error("forward shadow scoring failed — non-fatal: %s", exc)
 
     elapsed = time.time() - cycle_start
     _log.info("=== cycle complete in %.1fs ===", elapsed)
