@@ -183,6 +183,60 @@ Qualquer campo numerico de `BacktestConfig` e suportado sem modificar o runner.
 
 ---
 
+## A/B de sentimento: backtest historico + forward shadow
+
+Permite comparar, em graficos e numeros, se o sinal de sentimento ajuda ou atrapalha
+o soros. Ha dois angulos complementares:
+
+### Backtest A/B (historico)
+
+Roda o backtest duas vezes sobre a mesma janela de precos — uma vez sem sentimento
+(composite deterministico) e uma vez com o Fear & Greed Index historico (alternative.me)
+injetado por barra — e retorna as duas curvas de equity + metricas lado a lado.
+
+**Disparado on-demand** (nunca no carregamento da pagina), via o endpoint `GET /api/backtest-ab`.
+
+```
+GET /api/backtest-ab?symbols=BTC/USDT:crypto&start=2024-01-01&end=2024-12-31
+```
+
+Retorna `{ off: BacktestResult, on: BacktestResult, fngCoveragePct: number }`.
+
+**Caveat declarado na UI**: o backtest usa somente Fear & Greed como proxy de sentimento
+(votos CoinGecko e Claude nao tem historico), entao nao e o mesmo blend usado ao vivo.
+
+**F&G com lacunas**: datas sem entrada no historico sao preenchidas por backward-fill
+(ultimo valor conhecido). A `fngCoveragePct` mede apenas as datas com leitura exata
+(sem contar as preenchidas), para que o usuario saiba a solidez da cobertura.
+
+### Forward shadow A/B (ao vivo)
+
+A cada ciclo do bot, o loop computa **duas variantes** do composite:
+
+| Variante | Descricao |
+|---|---|
+| `real` | A variante configurada — e a que executa os trades de verdade. |
+| `shadow` | A variante oposta, calculada sem chamar Claude/subscricao (usa somente Fear & Greed + votos CoinGecko — keyless e barato). Nao execute trades reais. |
+
+Ambas as variantes sao persistidas como snapshots em `forward_shadow_snapshots`.
+O dashboard sobrepoe as duas curvas ao vivo + metricas, com flag de amostra pequena
+quando ha menos de 30 pontos (Sharpe inconclusivo).
+
+**Garantia de isolamento**: falha no shadow nao derruba o ciclo real. A variante shadow
+nunca chama o Claude nem consome quota da subscricao.
+
+### Modulos
+
+| Arquivo | Descricao |
+|---|---|
+| `sentiment/fear_greed_history.py` | Busca, indexa e faz lookup do F&G historico (alternative.me, backward-fill para datas faltantes) |
+| `backtest/ab_runner.py` | Runner A/B: roda o backtest engine 2x e retorna `ABResult` com as duas curvas e `fng_coverage_pct` |
+| `engine/shadow_tracker.py` | Forward shadow: computa scores keyless e persiste snapshots das duas variantes por ciclo |
+| `dashboard/app/api/backtest-ab/route.ts` | Endpoint on-demand para o backtest A/B historico |
+| `dashboard/app/api/forward-ab/route.ts` | Endpoint para o forward shadow A/B ao vivo |
+
+---
+
 ## Configuracao em tempo real (Settings)
 
 Alem das variaveis de ambiente, o bot expoe uma camada de override runtime via tabela
