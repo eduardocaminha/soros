@@ -244,7 +244,7 @@ cd dashboard && bun run dev
 
 | Aba | Conteudo |
 |---|---|
-| **Dashboard** | Equity curve, posicoes abertas, sinais, sentimento, screener, ordens, robustez do threshold |
+| **Dashboard** | Equity curve, posicoes abertas, sinais, sentimento, screener, ordens, robustez do threshold, benchmark vs BTC |
 | **Alertas** | WARNINGs e ERRORs registrados pelo bot. Badge vermelho mostra quantos alertas sao novos desde a ultima visita. |
 | **Configuracoes** | Tunables editaveis em runtime (sem restart do bot). Chaves de risco sao bloqueadas. |
 
@@ -253,6 +253,32 @@ cd dashboard && bun run dev
 O badge no tab "Alertas" exibe a contagem de alertas mais novos do que a ultima
 visita. O timestamp da ultima visita e persistido em `localStorage` sob a chave
 `soros_alerts_last_visit`. Abrir a aba zera o badge.
+
+### Benchmark vs BTC Buy-and-Hold
+
+O painel de benchmark compara a equity do Soros contra a estrategia simples de comprar
+e manter BTC desde o inicio do periodo monitorado ("buy-and-hold BTC"). Isso permite
+responder: o bot realmente gera alpha, ou seria mais simples so segurar BTC?
+
+**Como funciona:**
+
+- A curva de BTC e construida com o mesmo capital inicial e o mesmo timestamp de inicio
+  da equity do Soros.
+- Para cada snapshot de equity, busca o preco de fechamento de BTC/USDT mais recente
+  (forward-fill para lacunas no historico de precos).
+- Snapshots anteriores a qualquer dado de BTC sao excluidos da janela comparada.
+- O endpoint `GET /api/benchmark` retorna as duas series alinhadas mais as metricas
+  comparativas (retorno total, Sharpe anualizado, drawdown maximo).
+- Sharpe e sinalizado como "inconclusivo" quando ha menos de 30 pontos de dados.
+
+**Modulos:**
+
+| Arquivo | Descricao |
+|---|---|
+| `engine/benchmark.py` | Construcao da curva buy-and-hold (funcao pura + helpers de DB) |
+| `engine/metrics.py` | Metricas comparativas: retorno total, Sharpe anualizado, max drawdown |
+| `dashboard/lib/benchmark.ts` | Espelho TypeScript dos modulos Python (usado no dashboard e nos testes) |
+| `dashboard/app/api/benchmark/route.ts` | Endpoint Next.js que le DB e retorna JSON |
 
 ### Glossario / Tooltips
 
