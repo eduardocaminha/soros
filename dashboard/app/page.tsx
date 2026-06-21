@@ -168,6 +168,40 @@ interface BenchmarkData {
   error?: string;
 }
 
+interface ABMetrics {
+  total_return: number;
+  cagr: number;
+  sharpe: number;
+  max_dd: number;
+  win_rate: number;
+  n_trades: number;
+}
+
+interface ABSeries {
+  timestamps: number[];
+  offEquity: number[];
+  onEquity: number[];
+  initialCapital: number;
+  windowStart: number;
+  windowEnd: number;
+  nPoints: number;
+}
+
+interface BacktestABData {
+  ts: number;
+  run_id?: string;
+  run_ts?: number;
+  start_ts?: number;
+  end_ts?: number;
+  symbols?: string[];
+  fng_coverage_pct?: number;
+  off?: ABMetrics;
+  on?: ABMetrics;
+  series?: ABSeries;
+  empty?: boolean;
+  error?: string;
+}
+
 type TabId = "dashboard" | "alerts" | "settings";
 
 const ALERTS_STORAGE_KEY = "soros_alerts_last_visit";
@@ -206,6 +240,9 @@ const GLOSSARY: Record<string, string> = {
   "Paper": "Modo simulação: ordens são executadas virtualmente sem dinheiro real. Obrigatório 48 h+ antes de ativar live.",
   "Benchmark BTC": "Quanto valeria o mesmo capital inicial se simplesmente comprado e mantido em BTC desde o início do período (buy-and-hold). É o benchmark honesto para bots de cripto: mais de 80% dos bots de varejo ficam abaixo desta barra depois de custos.",
   "Retorno Total": "Variação percentual do capital desde o início da janela até o momento atual: (valor_atual − capital_inicial) / capital_inicial × 100.",
+  "Backtest A/B": "Comparação entre duas variantes do backtest: 'Sem Sentimento' usa apenas sinais determinísticos (momentum, volatilidade, funding); 'Com Sentimento' injeta o Fear & Greed histórico como sinal de sentimento. Permite avaliar se o sentimento melhora ou piora os resultados.",
+  "Cobertura F&G": "Fração das barras do backtest que tinham um valor do índice Fear & Greed disponível no alternative.me. Abaixo de 80% indica que parte do período é estimada por backward-fill.",
+  "Fear & Greed": "Índice de sentimento de mercado do alternative.me (0 = medo extremo, 100 = ganância extrema). Valores < 40 geram score negativo (bearish); > 60 geram score positivo (bullish); 40–60 são neutros.",
 };
 
 const SETTINGS_DESCRIPTIONS: Record<string, string> = {
@@ -925,6 +962,236 @@ function BenchmarkPanel() {
   );
 }
 
+// ─── Backtest A/B Panel ───────────────────────────────────────────────────────
+
+function BacktestABChart({ series }: { series: ABSeries }) {
+  const n = series.timestamps.length;
+  if (n < 2) return <p className="neutral" style={{ padding: "12px 16px" }}>Dados insuficientes para o gráfico.</p>;
+
+  const VW = 900;
+  const VH = 180;
+  const PAD = { top: 12, right: 16, bottom: 28, left: 64 };
+  const chartW = VW - PAD.left - PAD.right;
+  const chartH = VH - PAD.top - PAD.bottom;
+
+  const all = [...series.offEquity, ...series.onEquity];
+  const minY = Math.min(...all);
+  const maxY = Math.max(...all);
+  const rangeY = maxY - minY || 1;
+
+  const xOf = (i: number) => PAD.left + (i / (n - 1)) * chartW;
+  const yOf = (v: number) => PAD.top + chartH - ((v - minY) / rangeY) * chartH;
+
+  const offPath = series.offEquity
+    .map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(" ");
+  const onPath = series.onEquity
+    .map((v, i) => `${i === 0 ? "M" : "L"}${xOf(i).toFixed(1)},${yOf(v).toFixed(1)}`)
+    .join(" ");
+
+  const yTicks = 4;
+  const yTickVals = Array.from({ length: yTicks + 1 }, (_, k) => minY + (rangeY * k) / yTicks);
+
+  const startDate = new Date(series.windowStart * 1000).toLocaleDateString("pt-BR");
+  const endDate = new Date(series.windowEnd * 1000).toLocaleDateString("pt-BR");
+
+  return (
+    <svg
+      viewBox={`0 0 ${VW} ${VH}`}
+      style={{ width: "100%", height: VH, display: "block" }}
+      aria-label="Backtest A/B: curvas de equity sem vs com sentimento"
+    >
+      {yTickVals.map((v, k) => (
+        <g key={k}>
+          <line
+            x1={PAD.left} y1={yOf(v)}
+            x2={PAD.left + chartW} y2={yOf(v)}
+            stroke="#30363d" strokeWidth="0.5" strokeDasharray="3,4"
+          />
+          <text x={PAD.left - 6} y={yOf(v) + 4} textAnchor="end" fontSize="10" fill="#8b949e">
+            {fmtEquityLabel(v)}
+          </text>
+        </g>
+      ))}
+
+      <path d={offPath} fill="none" stroke="#8b949e" strokeWidth="2" strokeLinejoin="round" strokeDasharray="6,3" />
+      <path d={onPath} fill="none" stroke="#58a6ff" strokeWidth="2" strokeLinejoin="round" />
+
+      <text x={PAD.left} y={VH - 6} fontSize="10" fill="#8b949e">{startDate}</text>
+      <text x={PAD.left + chartW} y={VH - 6} fontSize="10" fill="#8b949e" textAnchor="end">{endDate}</text>
+
+      {/* Legend */}
+      <line x1={PAD.left + chartW - 160} y1={PAD.top + 4} x2={PAD.left + chartW - 148} y2={PAD.top + 4} stroke="#8b949e" strokeWidth="2" strokeDasharray="6,3" />
+      <text x={PAD.left + chartW - 144} y={PAD.top + 8} fontSize="11" fill="#e6edf3">Sem sentimento</text>
+      <rect x={PAD.left + chartW - 60} y={PAD.top + 1} width={12} height={3} fill="#58a6ff" rx="1" />
+      <text x={PAD.left + chartW - 44} y={PAD.top + 8} fontSize="11" fill="#e6edf3">Com F&amp;G</text>
+    </svg>
+  );
+}
+
+function BacktestABPanel() {
+  const [ab, setAb] = useState<BacktestABData | null>(null);
+
+  const load = useCallback(async () => {
+    try {
+      const res = await fetch("/api/backtest-ab");
+      const json = (await res.json()) as BacktestABData;
+      setAb(json);
+    } catch {
+      // silent — will retry on next poll
+    }
+  }, []);
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, POLL_MS);
+    return () => clearInterval(id);
+  }, [load]);
+
+  if (!ab || ab.error || ab.empty || !ab.off || !ab.on || !ab.series) {
+    if (!ab || ab.empty) {
+      return (
+        <Section title="Backtest A/B — Sentimento OFF vs ON">
+          <div style={{ padding: "16px 20px", color: "var(--text-muted)", fontSize: 12 }}>
+            Nenhum resultado ainda. Execute o comando para gerar o A/B:
+            <pre style={{
+              marginTop: 8,
+              background: "var(--bg)",
+              border: "1px solid var(--border)",
+              borderRadius: 6,
+              padding: "8px 12px",
+              fontSize: 11,
+              color: "var(--text)",
+              overflowX: "auto",
+            }}>
+              python -m backtest.ab_command --symbols BTC/USDT:crypto --start 2024-01-01 --end 2024-12-31
+            </pre>
+          </div>
+        </Section>
+      );
+    }
+    return null;
+  }
+
+  const off = ab.off;
+  const on = ab.on;
+  const s = ab.series;
+
+  const fmtPct = (v: number) => `${v >= 0 ? "+" : ""}${(v * 100).toFixed(2)}%`;
+
+  const fmtSharpe = (v: number) => {
+    const conclusive = s.nPoints >= 30;
+    return (
+      <span className={v >= 1 ? "positive" : v >= 0 ? "" : "negative"}>
+        {v.toFixed(2)}
+        {!conclusive && <span className="neutral" style={{ fontSize: 10 }}> *</span>}
+      </span>
+    );
+  };
+
+  const fmtDd = (v: number) => {
+    const pct = v * 100;
+    return <span className={pct > 20 ? "negative" : pct > 10 ? "" : "positive"}>{pct.toFixed(1)}%</span>;
+  };
+
+  const onBetter = on.total_return > off.total_return;
+
+  return (
+    <Section title="Backtest A/B — Sentimento OFF vs ON">
+      {/* F&G-only caveat — always visible */}
+      <div style={{
+        padding: "8px 16px",
+        borderBottom: "1px solid var(--border)",
+        background: "rgba(210,153,34,0.06)",
+        fontSize: 11,
+        color: "var(--text-muted)",
+        display: "flex",
+        gap: 8,
+        alignItems: "flex-start",
+      }}>
+        <span style={{ color: "#d29922", fontWeight: 600, flexShrink: 0 }}>Aviso:</span>
+        <span>
+          O sentimento no backtest usa <b>somente o Fear &amp; Greed histórico</b> (alternative.me) —
+          o índice de mercado inteiro, não por moeda. Votos CoinGecko e Claude não têm histórico,
+          portanto este A/B <b>não replica o blend exato ao vivo</b>. Use como indicação, não conclusão.
+          {typeof ab.fng_coverage_pct === "number" && (
+            <> · <Tooltip text={GLOSSARY["Cobertura F&G"]}>Cobertura F&G: {(ab.fng_coverage_pct * 100).toFixed(1)}%</Tooltip></>
+          )}
+        </span>
+      </div>
+
+      {/* Overlay chart */}
+      <div style={{ padding: "12px 16px 0" }}>
+        <BacktestABChart series={s} />
+      </div>
+
+      {/* Side-by-side comparison header */}
+      <div style={{
+        padding: "8px 16px",
+        borderTop: "1px solid var(--border)",
+        fontSize: 13,
+        fontWeight: 600,
+        color: onBetter ? "var(--green)" : "var(--red)",
+      }}>
+        {onBetter
+          ? "▲ Sentimento MELHOROU o retorno neste período"
+          : "▼ Sentimento PIOROU o retorno neste período"}
+      </div>
+
+      {/* Side-by-side metrics */}
+      <table>
+        <thead>
+          <tr>
+            <th style={{ width: "38%" }}>Métrica</th>
+            <th>Sem Sentimento</th>
+            <th><Tooltip text={GLOSSARY["Fear & Greed"]}>Com Sentimento (F&G)</Tooltip></th>
+          </tr>
+        </thead>
+        <tbody>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Retorno Total"]}>Retorno Total</Tooltip></td>
+            <td><span className={off.total_return >= 0 ? "positive" : "negative"}>{fmtPct(off.total_return)}</span></td>
+            <td><span className={on.total_return >= 0 ? "positive" : "negative"}>{fmtPct(on.total_return)}</span></td>
+          </tr>
+          <tr>
+            <td><Tooltip text={GLOSSARY["CAGR"]}>CAGR</Tooltip></td>
+            <td><span className={off.cagr >= 0 ? "positive" : "negative"}>{fmtPct(off.cagr)}</span></td>
+            <td><span className={on.cagr >= 0 ? "positive" : "negative"}>{fmtPct(on.cagr)}</span></td>
+          </tr>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Sharpe"]}>Sharpe</Tooltip></td>
+            <td>{fmtSharpe(off.sharpe)}</td>
+            <td>{fmtSharpe(on.sharpe)}</td>
+          </tr>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Max DD"]}>Max Drawdown</Tooltip></td>
+            <td>{fmtDd(off.max_dd)}</td>
+            <td>{fmtDd(on.max_dd)}</td>
+          </tr>
+          <tr>
+            <td><Tooltip text={GLOSSARY["Win Rate"]}>Win Rate</Tooltip></td>
+            <td>{(off.win_rate * 100).toFixed(1)}%</td>
+            <td>{(on.win_rate * 100).toFixed(1)}%</td>
+          </tr>
+          <tr>
+            <td>Trades</td>
+            <td className="neutral">{off.n_trades}</td>
+            <td className="neutral">{on.n_trades}</td>
+          </tr>
+        </tbody>
+      </table>
+
+      {/* Footnote */}
+      <div style={{ padding: "8px 12px", color: "var(--text-muted)", fontSize: 10, borderTop: "1px solid var(--border)" }}>
+        n={s.nPoints} pontos
+        {s.nPoints < 30 && " · * Sharpe com n<30 — não conclusivo"}
+        {ab.run_ts && <> · executado em {ts2str(ab.run_ts)}</>}
+        {ab.symbols && <> · {ab.symbols.join(", ")}</>}
+      </div>
+    </Section>
+  );
+}
+
 function Section({ title, count, children }: { title: string; count?: number; children: React.ReactNode }) {
   return (
     <div style={{ marginBottom: 24 }}>
@@ -1363,6 +1630,7 @@ export default function Dashboard() {
         <>
           <EquityCard data={data} />
           <BenchmarkPanel />
+          <BacktestABPanel />
           <SweepTable />
           <PositionsTable positions={data.positions} />
           <ScreenerTable screener={data.screener ?? []} />

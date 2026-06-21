@@ -208,3 +208,35 @@ CREATE INDEX IF NOT EXISTS ix_sweep_results_run_ts
     ON sweep_results (run_ts DESC);
 CREATE UNIQUE INDEX IF NOT EXISTS uq_sweep_results_sweep_threshold
     ON sweep_results (sweep_id, signal_threshold);
+
+-- ─────────────────────────────────────────────
+-- Backtest A/B results — sentiment OFF vs ON comparison.
+-- Each row is one on-demand A/B run; equity curves stored as JSON blobs.
+-- ─────────────────────────────────────────────
+CREATE TABLE IF NOT EXISTS backtest_ab_results (
+    id               INTEGER PRIMARY KEY AUTOINCREMENT,
+    run_id           TEXT    NOT NULL,   -- hex slug
+    run_ts           INTEGER NOT NULL,   -- unix epoch when the run happened
+    start_ts         INTEGER NOT NULL,   -- backtest window start
+    end_ts           INTEGER NOT NULL,   -- backtest window end
+    symbols_json     TEXT    NOT NULL,   -- JSON [["BTC/USDT","crypto"], ...]
+    fng_coverage_pct REAL    NOT NULL,   -- fraction of bars with F&G data
+    off_total_return REAL    NOT NULL,
+    off_cagr         REAL    NOT NULL,
+    off_sharpe       REAL    NOT NULL,
+    off_max_dd       REAL    NOT NULL,
+    off_win_rate     REAL    NOT NULL,
+    off_n_trades     INTEGER NOT NULL,
+    on_total_return  REAL    NOT NULL,
+    on_cagr          REAL    NOT NULL,
+    on_sharpe        REAL    NOT NULL,
+    on_max_dd        REAL    NOT NULL,
+    on_win_rate      REAL    NOT NULL,
+    on_n_trades      INTEGER NOT NULL,
+    off_equity_json  TEXT    NOT NULL,   -- JSON [[ts, equity], ...]
+    on_equity_json   TEXT    NOT NULL,   -- JSON [[ts, equity], ...]
+    inserted_at      INTEGER NOT NULL DEFAULT (unixepoch())
+);
+
+CREATE INDEX IF NOT EXISTS ix_backtest_ab_run_ts
+    ON backtest_ab_results (run_ts DESC);
