@@ -136,6 +136,48 @@ class Database:
             )
             conn.commit()
 
+        if "forward_shadow_snapshots" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS forward_shadow_snapshots (
+                    id           INTEGER PRIMARY KEY AUTOINCREMENT,
+                    ts           INTEGER NOT NULL DEFAULT (unixepoch()),
+                    variant      TEXT    NOT NULL CHECK (variant IN ('real', 'shadow')),
+                    equity       REAL    NOT NULL,
+                    peak_equity  REAL    NOT NULL,
+                    drawdown_pct REAL    NOT NULL DEFAULT 0.0,
+                    is_paper     INTEGER NOT NULL DEFAULT 1
+                );
+                CREATE INDEX IF NOT EXISTS ix_fwd_shadow_variant_ts
+                    ON forward_shadow_snapshots (variant, ts DESC);
+                """
+            )
+            conn.commit()
+
+        if "shadow_positions" not in tables:
+            conn.executescript(
+                """
+                CREATE TABLE IF NOT EXISTS shadow_positions (
+                    id             INTEGER PRIMARY KEY AUTOINCREMENT,
+                    symbol         TEXT    NOT NULL,
+                    asset_class    TEXT    NOT NULL,
+                    side           TEXT    NOT NULL DEFAULT 'long',
+                    quantity       REAL    NOT NULL,
+                    entry_price    REAL    NOT NULL,
+                    current_price  REAL    NOT NULL DEFAULT 0.0,
+                    unrealized_pnl REAL    NOT NULL DEFAULT 0.0,
+                    realized_pnl   REAL    NOT NULL DEFAULT 0.0,
+                    status         TEXT    NOT NULL DEFAULT 'open'
+                                   CHECK (status IN ('open', 'closed')),
+                    opened_at      INTEGER NOT NULL DEFAULT (unixepoch()),
+                    closed_at      INTEGER
+                );
+                CREATE INDEX IF NOT EXISTS ix_shadow_pos_symbol_status
+                    ON shadow_positions (symbol, status);
+                """
+            )
+            conn.commit()
+
 
 # Module-level singleton; components call get_connection() instead of
 # instantiating Database directly.
