@@ -7,9 +7,12 @@ reports:
 
     total_return, CAGR, Sharpe, max_drawdown, win_rate, num_trades
 
-Sentiment is excluded from backtest signals: no LLM replay is possible.
-The deterministic composite is computed with the same _deterministic_composite
-logic from signals.compute (weights re-normalised to exclude sentiment).
+By default, sentiment is excluded from backtest signals (no LLM replay is
+possible).  The deterministic composite is computed with the same
+_deterministic_composite logic from signals.compute (weights re-normalised to
+exclude sentiment).  Pass a ``sentiment_fn`` to run_backtest to inject a
+per-bar sentiment score (e.g. Fear & Greed history) and get the full weighted
+composite including sentiment.
 
 When use_screener=True (or CLI --screener), the symbol list is derived from
 engine.screener.screen() so the backtest runs the same universe the live loop
@@ -37,6 +40,7 @@ CLI:
 from __future__ import annotations
 
 import math
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Optional
 
@@ -167,8 +171,14 @@ def _get_signal(
     window_df: pd.DataFrame,
     asset_class: str,
     signal_threshold: float,
+    sentiment_score: float | None = None,
 ) -> tuple[float, str]:
-    """Compute deterministic composite + action from an OHLCV window."""
+    """Compute composite + action from an OHLCV window.
+
+    When *sentiment_score* is None, uses the deterministic composite (no
+    sentiment).  When a float is provided, blends it into the full
+    class-weighted composite via engine.signal_aggregator._final_composite.
+    """
     if window_df.empty:
         return 0.0, "hold"
 
@@ -182,7 +192,11 @@ def _get_signal(
     fund = funding.compute(latest_funding) if asset_class == "crypto" else None
     ign = ignition.compute(window_df) if asset_class == "crypto" else None
 
-    composite = _deterministic_composite(mom, vol, fund, asset_class, ign=ign)
+    if sentiment_score is not None:
+        from engine.signal_aggregator import _final_composite
+        composite = _final_composite(mom, vol, fund, sentiment_score, asset_class, ign=ign)
+    else:
+        composite = _deterministic_composite(mom, vol, fund, asset_class, ign=ign)
 
     # Respect the caller's threshold rather than the global config default.
     if composite >= signal_threshold:
@@ -263,6 +277,8 @@ def _compute_metrics(
 def run_backtest(
     cfg: BacktestConfig,
     prices_df: Optional[pd.DataFrame] = None,
+    *,
+    sentiment_fn: Optional[Callable[[int, str, str], float]] = None,
 ) -> BacktestResult:
     """Run the backtest simulation.
 
@@ -271,6 +287,11 @@ def run_backtest(
         prices_df: Optional pre-loaded price DataFrame with columns
             [symbol, asset_class, ts, open, high, low, close, volume, funding_rate].
             If None, data is loaded from the configured SQLite DB.
+        sentiment_fn: Optional callable ``(ts, symbol, asset_class) -> float`` that
+            returns a sentiment score in [-1, 1] for the given bar.  When provided,
+            the score is blended into the composite via the full class-weighted formula
+            (same as the live aggregator).  When None, sentiment is excluded and only
+            deterministic signals drive the composite.
 
     Returns:
         BacktestResult with all metrics and the full equity curve + trade list.
@@ -378,7 +399,8 @@ def run_backtest(
             if sym_df is None:
                 continue
             window_df = sym_df[sym_df["ts"] <= ts].tail(cfg.window).copy()
-            _, action = _get_signal(window_df, asset_class, cfg.signal_threshold)
+            sent = sentiment_fn(ts, sym, asset_class) if sentiment_fn is not None else None
+            _, action = _get_signal(window_df, asset_class, cfg.signal_threshold, sentiment_score=sent)
 
             if action == "buy" and sym not in positions:
                 if len(positions) >= cfg.max_open_positions:
