@@ -264,6 +264,13 @@ def _run_cycle(rm: RiskManager) -> None:
     # 8. Snapshot equity for drawdown tracking
     rm.record_equity(equity, is_paper=is_paper)
 
+    # 9. Forward shadow A/B (best-effort — failure must not break the cycle)
+    try:
+        from engine import shadow_tracker
+        shadow_tracker.snapshot_forward_ab(equity, aggregated, is_paper=is_paper)
+    except Exception as exc:  # noqa: BLE001
+        _log.error("forward shadow A/B failed — continuing: %s", exc)
+
     elapsed = time.time() - cycle_start
     _log.info("=== cycle complete in %.1fs ===", elapsed)
 
