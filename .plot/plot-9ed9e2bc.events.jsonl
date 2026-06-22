@@ -1,2 +1,3 @@
 {"type":"plot_created","actor":"user:operator","at":"2026-06-21T20:51:48.189Z","data":{"name":"Edição de agents no warren"}}
 {"type":"run_dispatched","actor":"user:operator","at":"2026-06-21T20:51:49.865Z","data":{"run_id":"run_95kn6qyq8ekp","agent":"leveret","model":"claude-opus-4-8","project":"prj_cchg17katpmp"}}
+{"type":"status_changed","actor":"user:operator","at":"2026-06-22T18:51:53.123Z","data":{"from":"drafting","to":"archived"}}
