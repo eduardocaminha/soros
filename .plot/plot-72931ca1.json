@@ -69,6 +69,6 @@
   },
   "name": "soros: crypto trading bot (deterministico + sentimento, SQLite local)",
   "schema_version": 1,
-  "status": "ready",
-  "updated_at": "2026-06-18T00:40:19.865Z"
+  "status": "active",
+  "updated_at": "2026-06-22T21:22:02.591Z"
 }

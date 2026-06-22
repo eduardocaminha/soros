@@ -10,3 +10,4 @@
 {"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:16.691Z","data":{"id":"att-005","type":"mulch_record","ref":"mx-d480e1","role":"informs"}}
 {"type":"attachment_added","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:18.233Z","data":{"id":"att-006","type":"mulch_record","ref":"mx-9e5ce8","role":"informs"}}
 {"type":"status_changed","actor":"user:eduardo-caminha","at":"2026-06-18T00:40:19.865Z","data":{"from":"drafting","to":"ready"}}
+{"type":"status_changed","actor":"user:operator","at":"2026-06-22T21:22:02.591Z","data":{"from":"ready","to":"active"}}
